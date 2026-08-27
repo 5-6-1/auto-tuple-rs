@@ -23,7 +23,7 @@
 ### 2.1 轨道判定
 
 - 扫描**被选中项**的签名（方法参数/返回/泛型 bound/方法 where、关联常量类型、关联类型 bound）以及**原 trait 级 where**。
-- 标识符解析：签名中出现的标识符，排除方法自身的泛型参数名后，命中 trait 泛型参数集 → 引用。方法泛型参数与 trait 泛型参数**同名被 Rust 禁止**（E0403），故无需遮蔽分析，排除逻辑仅为防御。
+- 标识符解析：签名中出现的标识符，排除方法自身的泛型参数名后，命中 trait 泛型参数集 → 引用。类型路径（`visit_path`）与 lifetime（`visit_lifetime`，`&'a str` 场景）都要扫描。方法泛型参数与 trait 泛型参数**同名被 Rust 禁止**（E0403），排除逻辑仅为防御。
 - 任一 trait 泛型参数被引用 → **共享轨道**；否则 → **异参轨道（All）**。
 - 未选中的项不参与判定。
 
@@ -211,6 +211,7 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 - 非法范围 / 非法筛选语法 / 指定的项不存在。
 - 参数方向嵌套容器 Self。
 - 参数中 `impl Trait` 含 Self（`fn f(x: impl Iterator<Item = Self>)`——单值无法同时满足各元素的 Item 约束）。
+- 返回中 `+ use<..>` precise capturing（trait/impl 两侧的 per-element opaque 捕获列表尚未处理）。
 - where 中复杂 Self 嵌套。
 - auto trait。
 - 空选择集提示。

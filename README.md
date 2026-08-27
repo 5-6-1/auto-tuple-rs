@@ -88,8 +88,9 @@ unparameterized element bound (`__T0: Tr`).
 Supported:
 
 - `&self` / `&mut self` / `self` receivers and associated functions
-- generic methods, `where` clauses, lifetimes (including elided lifetime
-  returns such as `fn name(&self) -> &str`)
+- generic methods, `where` clauses, lifetimes (trait-level `'a` is lifted into
+  the helper trait; elided-lifetime returns such as `fn name(&self) -> &str`
+  work)
 - `async fn` (sequential await) and `unsafe fn` / `unsafe trait`
 - `impl Trait` (RPIT) returns: each element keeps its own opaque type
   (`fn f() -> impl Iterator<Item = Self>` becomes a tuple of per-element
@@ -106,6 +107,8 @@ Unsupported (clear `compile_error!`):
   params, `Vec<Self>` params)
 - `impl Trait` parameters mentioning `Self` (a single value cannot satisfy the
   per-element `Item` constraints)
+- `+ use<..>` precise capturing in returns (the trait/impl capture lists of
+  the per-element opaques are not yet handled)
 - generic associated types (GATs)
 - `Self` inside where-clause bounds in non-subject position
 - auto traits

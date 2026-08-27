@@ -1,0 +1,5 @@
+error: `use<..>` precise capturing in returns is not supported yet
+ --> tests/fail/precise_capture.rs:7:37
+  |
+7 |     fn tokens(&self, s: &'a str) -> impl Iterator<Item = &'a str> + use<'a, Self>;
+  |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

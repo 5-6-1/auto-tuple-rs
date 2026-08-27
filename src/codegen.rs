@@ -14,6 +14,23 @@ use syn::{
 use crate::analyze::Track;
 use crate::rewrite::{self, tupleize};
 
+/// Whether a type contains a `use<..>` precise-capturing bound.
+fn contains_precise_capture(ty: &Type) -> bool {
+    use syn::visit::Visit;
+    struct Find(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Find {
+        fn visit_type_param_bound(&mut self, node: &'ast syn::TypeParamBound) {
+            if matches!(node, syn::TypeParamBound::PreciseCapture(_)) {
+                self.0 = true;
+            }
+            syn::visit::visit_type_param_bound(self, node);
+        }
+    }
+    let mut finder = Find(false);
+    finder.visit_type(ty);
+    finder.0
+}
+
 /// The trait items selected for tuple-ization.
 pub struct Selected<'a> {
     pub methods: Vec<&'a TraitItemFn>,
@@ -277,6 +294,12 @@ fn rewrite_signature(sig: &mut Signature, n: usize, elems: &[Ident]) -> Result<(
         ReturnType::Default => parse_quote!(()),
         ReturnType::Type(_, ty) => (**ty).clone(),
     };
+    if contains_precise_capture(&ret) {
+        return Err(syn::Error::new_spanned(
+            &ret,
+            "`use<..>` precise capturing in returns is not supported yet",
+        ));
+    }
     sig.output = ReturnType::Type(parse_quote!(->), Box::new(tupleize(&ret, n, elems)));
 
     for (idx, arg) in sig.inputs.iter_mut().enumerate() {

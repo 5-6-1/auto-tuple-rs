@@ -101,6 +101,16 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         }
         syn::visit::visit_path(self, node);
     }
+
+    fn visit_lifetime(&mut self, node: &'ast syn::Lifetime) {
+        // `&'a str` in a signature references the trait's `'a`; lifetimes are
+        // not paths, so they need a dedicated hook.
+        let name = node.ident.to_string();
+        if !self.method_params.contains(&name) && self.trait_params.contains(&name) {
+            self.hit = true;
+        }
+        syn::visit::visit_lifetime(self, node);
+    }
 }
 
 #[cfg(test)]
