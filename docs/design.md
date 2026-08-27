@@ -207,10 +207,20 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 ## 7. 命名与可见性
 
 - 共享：`_{Trait}Tuple{N}`；异参：`_{Trait}Tuple{N}All`（前导下划线）。
-- 生成在原 trait 所在模块，可见性与原 trait 相同（pub trait → pub 辅助 trait），`#[doc(hidden)]`。
+- 生成在原 trait 所在模块，`#[doc(hidden)]`。
+- 可见性：默认继承原 trait（pub trait → pub 辅助 trait）；可用属性覆盖（`#[auto_tuple(pub(crate))]`），适合"原 trait 公开但辅助 trait 保持 crate 内"的场景。
 - 可命名覆盖（同时覆盖两个轨道名）。
 - 跨模块同名 trait 不冲突（模块隔离）；用户手动实现同名辅助 trait → E0119，文档约定 + 可命名规避。
 - 生成名（元素参数 `__T{i}`、每元素参数组 `__T{i}_{name}`/`'__L{i}_{name}`/`__C{i}_{name}`、合成参数 `__arg{i}`）自动避让原 trait 参数名与已有参数名。
+
+### 7.1 设计原则：内部名不暴露
+
+辅助 trait 的名字与全部生成参数名是**内部实现细节**，不属于用户 API：
+
+- **同模块调用零暴露**：辅助 trait 与调用代码同模块时，方法解析自动找到它，用户代码不出现任何生成名。
+- **跨模块调用**是 Rust 方法解析的语言规则：需要把辅助 trait 引入作用域（`use`），与任何 trait 方法一致（`use std::io::Read` 才能调 `.read()`）。这是语言机制，宏无法绕过；文档不鼓励也不示范这种用法。
+- 辅助 trait 带 `#[doc(hidden)]`，不下划线的名字不进 rustdoc；完全隐藏用 `pub(crate)` 覆盖。
+- 此原则对未来的功能（命名覆盖、重导出等）始终生效。
 
 ## 8. 错误处理（compile_error）
 

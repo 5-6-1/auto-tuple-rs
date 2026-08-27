@@ -31,7 +31,6 @@ impl<'a> Tr<'a> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let t = (X, Y);
     let s = String::from("hello");

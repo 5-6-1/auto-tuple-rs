@@ -31,7 +31,6 @@ impl Tr for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let v = 5;
     assert_eq!(<(X, Y)>::conv(&v), (6, 10));

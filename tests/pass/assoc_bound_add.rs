@@ -43,7 +43,6 @@ impl Tr for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let t = (X, Y);
     assert_eq!(t.get(), (1, 2));

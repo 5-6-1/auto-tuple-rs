@@ -27,7 +27,6 @@ impl Tr for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let t = (X, Y);
     assert_eq!(t.dup(), (3, 4));

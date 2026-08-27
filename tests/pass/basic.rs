@@ -53,7 +53,6 @@ impl Tr for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     // Associated function forwarding.
     assert_eq!(<(X, Y)>::zero(), (1, 10));

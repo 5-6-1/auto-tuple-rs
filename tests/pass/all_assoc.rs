@@ -30,7 +30,6 @@ impl Tr<String> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2All;
 
     let t = (X(7), Y(8));
     assert_eq!(t.get(), (7, 8));

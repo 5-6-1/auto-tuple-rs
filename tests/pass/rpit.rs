@@ -34,7 +34,6 @@ impl Tr for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let t = (X, Y);
 

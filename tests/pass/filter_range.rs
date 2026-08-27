@@ -41,7 +41,6 @@ impl Tr for Z {
 }
 
 fn main() {
-    use crate::_TrTuple3;
 
     let t = (X, Y, Z);
     assert_eq!(t.foo(), (1, 2, 3));

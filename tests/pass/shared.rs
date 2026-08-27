@@ -30,7 +30,6 @@ impl Tr<u32> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let v = 10;
     assert_eq!(<(X, Y)>::conv(&v), (11, 20));

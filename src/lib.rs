@@ -20,7 +20,7 @@
 //! impl Tr for Y { fn zero() -> usize { 2 } }
 //!
 //! # fn main() {
-//! use auto_tuple::_TrTuple2;   // helper trait must be in scope
+//! // No import needed: the helper trait lives in this module.
 //! assert_eq!(<(X, Y)>::zero(), (1, 2));
 //! # }
 //! ```
@@ -68,8 +68,9 @@ fn expand(
         analyze::decide_track(&trait_, &selected.methods, &selected.consts, &selected.types);
 
     let mut generated = Vec::new();
+    let vis = cfg.vis.clone().unwrap_or_else(|| trait_.vis.clone());
     for n in cfg.sizes.clone() {
-        generated.push(codegen::generate(&trait_, track, &selected, n)?);
+        generated.push(codegen::generate(&trait_, track, &selected, n, &vis)?);
     }
 
     Ok(quote!(#trait_ #(#generated)*))

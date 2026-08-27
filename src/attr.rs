@@ -17,20 +17,23 @@ use std::ops::RangeInclusive;
 
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, LitInt, Result, Token};
+use syn::{Ident, LitInt, Result, Token, Visibility};
 
 /// Parsed `#[auto_tuple(...)]` configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Config {
     /// Inclusive range of tuple arities to generate. Defaults to `2..=12`.
     pub sizes: RangeInclusive<usize>,
     /// Explicitly selected trait items; `None` means "all supported items".
     pub items: Option<BTreeSet<String>>,
+    /// Visibility override for the generated helper traits; `None` inherits
+    /// the original trait's visibility.
+    pub vis: Option<Visibility>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { sizes: 2..=12, items: None }
+        Self { sizes: 2..=12, items: None, vis: None }
     }
 }
 
@@ -76,8 +79,16 @@ impl Parse for Config {
                 cfg.sizes = start..=end;
             } else if input.peek(Ident) {
                 items.insert(input.parse::<Ident>()?.to_string());
+            } else if input.peek(Token![pub]) {
+                let vis: Visibility = input.parse()?;
+                if cfg.vis.is_some() {
+                    return Err(input.error("duplicate visibility specifier"));
+                }
+                cfg.vis = Some(vis);
             } else {
-                return Err(input.error("expected an identifier or a range like `2..=12`"));
+                return Err(
+                    input.error("expected an identifier, a range like `2..=12`, or a visibility")
+                );
             }
 
             if input.is_empty() {
@@ -107,7 +118,9 @@ mod tests {
     #[test]
     fn empty_args_use_defaults() {
         let cfg = Config::from_tokens(TokenStream::new()).unwrap();
-        assert_eq!(cfg, Config::default());
+        assert_eq!(cfg.sizes, 2..=12);
+        assert!(cfg.items.is_none());
+        assert!(cfg.vis.is_none());
     }
 
     #[test]
@@ -162,5 +175,17 @@ mod tests {
     #[test]
     fn rejects_multiple_ranges() {
         assert!(syn::parse_str::<Config>("2..=4, 6..=8").is_err());
+    }
+
+    #[test]
+    fn parses_visibility_override() {
+        let cfg = parse("pub(crate), foo");
+        assert!(cfg.vis.is_some());
+        assert_eq!(cfg.items, Some(BTreeSet::from(["foo".into()])));
+    }
+
+    #[test]
+    fn rejects_duplicate_visibility() {
+        assert!(syn::parse_str::<Config>("pub, pub(crate)").is_err());
     }
 }

@@ -133,9 +133,9 @@ pub struct Selected<'a> {
 
 /// Generates the helper trait and blanket impl for one arity.
 pub fn generate(
-    trait_: &ItemTrait, track: Track, selected: &Selected, n: usize,
+    trait_: &ItemTrait, track: Track, selected: &Selected, n: usize, vis: &syn::Visibility,
 ) -> Result<TokenStream> {
-    let helper = build_helper_trait(trait_, track, selected, n)?;
+    let helper = build_helper_trait(trait_, track, selected, n, vis)?;
     let impl_ = build_impl(trait_, track, selected, n)?;
     Ok(quote!(#helper #impl_))
 }
@@ -322,7 +322,7 @@ fn rewrite_where_clause(wc: &Option<WhereClause>, elems: &[Ident]) -> Result<Opt
 }
 
 fn build_helper_trait(
-    trait_: &ItemTrait, track: Track, sel: &Selected, n: usize,
+    trait_: &ItemTrait, track: Track, sel: &Selected, n: usize, vis: &syn::Visibility,
 ) -> Result<ItemTrait> {
     let has_orig_params = !trait_.generics.params.is_empty();
     let taken = trait_param_names(&trait_.generics);
@@ -386,7 +386,7 @@ fn build_helper_trait(
 
     Ok(ItemTrait {
         attrs: vec![parse_quote!(#[doc(hidden)])],
-        vis: trait_.vis.clone(),
+        vis: vis.clone(),
         modifiers: syn::TraitModifiers::default(),
         unsafety: trait_.unsafety,
         trait_token: Default::default(),
@@ -725,7 +725,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
-        let out = generate(&trait_, Track::All, &sel, 2).unwrap();
+        let out = generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited).unwrap();
         assert!(!out.to_string().is_empty());
     }
 
@@ -749,7 +749,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
-        let out = generate(&trait_, Track::All, &sel, 2).unwrap().to_string();
+        let out = generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited)
+            .unwrap()
+            .to_string();
         assert!(
             out.contains("__T0 :: Output :: Item : Clone"),
             "expected per-element projection, got: {out}"

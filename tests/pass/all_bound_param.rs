@@ -24,7 +24,6 @@ impl Tr<String> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2All;
 
     assert_eq!((X, Y).f(), (1, 2));
 }

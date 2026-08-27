@@ -28,7 +28,6 @@ impl Tr<Vec<u8>> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     let t = (X, Y);
     assert_eq!(t.get(), (vec![1], vec![2]));

@@ -32,8 +32,8 @@ impl Tr for Y { /* ... */ }
 //   impl<__T0: Tr, __T1: Tr> _TrTuple2<__T0, __T1> for (__T0, __T1) { ... }
 
 fn main() {
-    use auto_tuple::_TrTuple2; // helper trait must be in scope
-
+    // No imports needed: the helper trait lives in this module, so method
+    // resolution finds it automatically. Zero boilerplate.
     let mut t = (X(1), Y(2));
     t.bump();                              // (X(2), Y(3))
     assert_eq!(t.0.0, 2);
@@ -42,6 +42,11 @@ fn main() {
     // <(X, Y) as _TrTuple2<X, Y>>::Output == (X::Output, Y::Output)
 }
 ```
+
+The helper traits are generated in the same module as the original trait and
+share its visibility. Within that module the tuple-ized methods are callable
+directly; **cross-module calls need the helper trait imported**, exactly like
+any other trait's methods (`use std::io::Read` to call `.read()`).
 
 ## Core semantics
 
@@ -68,6 +73,8 @@ There is no other semantics: no arithmetic merging, no short-circuiting.
 - Ranges follow Rust range semantics (`2..12` excludes 12, `2..=12` includes it).
 - Without an explicit item list all **methods** are processed; associated
   consts and types are processed only when explicitly named.
+- A visibility override (`pub`, `pub(crate)`, ...) applies to the generated
+  helper traits; by default they inherit the original trait's visibility.
 - The helper traits are generated in the same module as the original trait and
   share its visibility; bring them into scope with `use` to call the tuple-ized
   methods.

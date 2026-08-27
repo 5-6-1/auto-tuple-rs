@@ -31,7 +31,6 @@ impl<'a, 'b: 'a> Tr<'a, 'b> for Y {
 }
 
 fn main() {
-    use crate::_TrTuple2;
 
     assert_eq!((X, Y).f(), (1, 2));
     let s = String::from("hi");
