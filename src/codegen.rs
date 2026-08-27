@@ -334,9 +334,11 @@ fn gen_helper_method(item: &TraitItemFn, n: usize, elems: &[Ident]) -> Result<Tr
 }
 
 fn gen_impl_method(item: &TraitItemFn, n: usize, elems: &[Ident]) -> Result<ImplItemFn> {
+    // Build the body from the *original* signature: unpacking decisions must
+    // see the pre-rewrite parameter types (`Self::Output`, `&Self`, ...).
+    let block = build_body(&item.sig, n, elems)?;
     let mut m = item.clone();
     rewrite_signature(&mut m.sig, n, elems)?;
-    let block = build_body(&m.sig, n, elems)?;
     Ok(ImplItemFn {
         attrs: Vec::new(),
         vis: syn::Visibility::Inherited,
@@ -355,9 +357,14 @@ fn build_body(sig: &Signature, n: usize, elems: &[Ident]) -> Result<Block> {
         .map(|i| {
             let elem = &elems[i];
             let idx = syn::Index::from(i);
-            let args = sig.inputs.iter().filter_map(|arg| match arg {
+            let args = sig.inputs.iter().enumerate().filter_map(|(pidx, arg)| match arg {
                 FnArg::Typed(pt) => match &*pt.pat {
                     Pat::Ident(pi) => Some(rewrite::unpack_arg(&pt.ty, &pi.ident, i)),
+                    // `_: T` gets the same synthetic name as in rewrite_signature.
+                    Pat::Wild(_) => {
+                        let name = format_ident!("__arg{pidx}");
+                        Some(rewrite::unpack_arg(&pt.ty, &name, i))
+                    }
                     _ => None,
                 },
                 FnArg::Receiver(_) => None,

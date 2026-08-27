@@ -27,10 +27,19 @@ pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
 
     // The original trait-level constraints must remain expressible in the
     // helper trait: parameter bounds and the where clause count as references.
+    // Only the *bounds* are scanned; a generic parameter's own declaration is
+    // not a reference (a `LifetimeParam` would otherwise trip `visit_lifetime`).
     let mut scanner =
         Scanner { trait_params: &trait_params, method_params: &BTreeSet::new(), hit: false };
     for param in &trait_.generics.params {
-        scanner.visit_generic_param(param);
+        if let GenericParam::Type(tp) = param {
+            for bound in &tp.bounds {
+                scanner.visit_type_param_bound(bound);
+            }
+            if let Some((_, default)) = &tp.default {
+                scanner.visit_type(default);
+            }
+        }
     }
     if let Some(wc) = &trait_.generics.where_clause {
         scanner.visit_where_clause(wc);
@@ -218,5 +227,49 @@ mod tests {
         };
         let selected = vec![select_one(&trait_, "g").remove(0), select_one(&trait_, "h").remove(0)];
         assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn lifetime_reference_is_shared() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<'a> {
+                fn f(x: &'a str);
+            }
+        };
+        let selected = select_one(&trait_, "f");
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn method_local_lifetime_is_not_reference() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<'a> {
+                fn f<'b>(x: &'b str);
+            }
+        };
+        let selected = select_one(&trait_, "f");
+        assert_eq!(decided(&trait_, &selected), Track::All);
+    }
+
+    #[test]
+    fn const_generic_reference_is_shared() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<const N: usize> {
+                fn arr() -> [u8; N];
+            }
+        };
+        let selected = select_one(&trait_, "arr");
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn trait_without_generics_is_all() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr {
+                fn foo(&self);
+            }
+        };
+        let selected = select_one(&trait_, "foo");
+        assert_eq!(decided(&trait_, &selected), Track::All);
     }
 }

@@ -1,0 +1,5 @@
+error: auto traits are not supported by `#[auto_tuple]`
+ --> tests/fail/auto_trait.rs:6:1
+  |
+6 | auto trait Tr {}
+  | ^^^^^^^^^^^^^^^^

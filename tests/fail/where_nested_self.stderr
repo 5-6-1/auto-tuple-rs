@@ -1,0 +1,5 @@
+error: `Self` inside a where clause is only supported as the predicate subject
+ --> tests/fail/where_nested_self.rs:9:9
+  |
+9 |         Vec<Self>: Clone;
+  |         ^^^^^^^^^^^^^^^^

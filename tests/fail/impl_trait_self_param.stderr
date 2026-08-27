@@ -1,0 +1,5 @@
+error: `Self` nested inside a generic type is not supported in parameters
+ --> tests/fail/impl_trait_self_param.rs:8:20
+  |
+8 |     fn f(&self, x: impl Iterator<Item = Self>);
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^

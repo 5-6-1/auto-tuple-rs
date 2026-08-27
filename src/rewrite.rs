@@ -176,16 +176,12 @@ impl VisitMut for ElemRewriter<'_> {
         if let Type::Path(tp) = node {
             if let Some(q) = &mut tp.qself {
                 if is_self_type(q.ty.as_ref()) {
-                    if q.position == 1 {
-                        // `Self::Assoc...` -> `elem::Assoc...`
-                        let path = tp.path.clone();
-                        let elem = self.elem.clone();
-                        *node = parse_quote!(#elem #path);
-                    } else {
-                        // `<Self as Tr>::Assoc` -> `<elem as Tr>::Assoc`
-                        let elem = self.elem.clone();
-                        *q.ty = parse_quote!(#elem);
-                    }
+                    // `<Self as Tr>::Assoc` / `<Self>::Assoc` -> the same shape
+                    // with the element type substituted for `Self`. Note syn's
+                    // `position` counts the trait-constraint segments, not the
+                    // assoc segments, so the qself shape must be preserved.
+                    let elem = self.elem.clone();
+                    *q.ty = parse_quote!(#elem);
                     return;
                 }
             } else if tp.path.is_ident("Self") {
@@ -298,6 +294,33 @@ mod tests {
         assert_eq!(out.to_token_stream().to_string(), "(A :: Output , B :: Output)");
         let out = rewrite_param(&t("&Self::Output"), 2, &elems2()).unwrap();
         assert_eq!(out.to_token_stream().to_string(), "& (A :: Output , B :: Output)");
+    }
+
+    #[test]
+    fn tupleize_lifetime_self_ref() {
+        let out = tupleize(&t("&'a Self"), 2, &elems2());
+        assert_eq!(out.to_token_stream().to_string(), "(& 'a A , & 'a B)");
+    }
+
+    #[test]
+    fn tupleize_qself_trait_projection() {
+        let out = tupleize(&t("<Self as Tr>::Output"), 2, &elems2());
+        assert_eq!(
+            out.to_token_stream().to_string(),
+            "(< A as Tr > :: Output , < B as Tr > :: Output)"
+        );
+    }
+
+    #[test]
+    fn param_tuple_containing_self_is_rejected() {
+        assert!(param_shape(&t("(Self, T)")).is_err());
+        assert!(param_shape(&t("&(Self, T)")).is_err());
+    }
+
+    #[test]
+    fn unpack_mut_assoc() {
+        let x: Ident = parse_quote!(x);
+        assert_eq!(unpack_arg(&t("&mut Self::Output"), &x, 0).to_string(), "& mut x . 0");
     }
 
     #[test]

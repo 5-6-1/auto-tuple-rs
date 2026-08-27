@@ -1,0 +1,5 @@
+error: unsupported parameter pattern; use a plain identifier
+ --> tests/fail/bad_param_pattern.rs:7:17
+  |
+7 |     fn f(&self, (a, b): (usize, usize));
+  |                 ^^^^^^
