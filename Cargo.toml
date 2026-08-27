@@ -8,6 +8,8 @@ categories = ["development-tools::procedural-macro-helpers"]
 license = "MIT"
 rust-version = "1.98"
 edition = "2024"
+repository = "https://github.com/5-6-1/auto-tuple-rs"
+documentation = "https://docs.rs/auto-tuple"
 
 [lib]
 proc-macro = true
