@@ -1,5 +1,9 @@
 # auto-tuple
 
+[![CI](https://github.com/5-6-1/auto-tuple-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/5-6-1/auto-tuple-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/auto-tuple)](https://crates.io/crates/auto-tuple)
+[![docs.rs](https://img.shields.io/docsrs/auto-tuple)](https://docs.rs/auto-tuple)
+
 Element-wise tuple-ization for Rust traits: an `#[auto_tuple]` attribute macro
 that generates, for each requested arity, a helper trait whose items forward
 element-wise to every element of an N-tuple. Package `auto-tuple`, crate
