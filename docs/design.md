@@ -1,0 +1,236 @@
+# auto_tuple 设计文档
+
+> 本文件是实现的唯一依据。核心语义、双轨道形态、重写规则、边界与错误处理均在此定稿。
+> 状态：语义定稿，待实现。
+
+## 1. 核心语义
+
+对被选中 trait 项做**逐元素元组化**：
+
+```rust
+(x, y).foo(a, b, c) == (x.foo(a, b, c), y.foo(a, b, c))
+(A, B)::foo(a, b, c) == (A::foo(a, b, c), B::foo(a, b, c))
+(A, B)::MAX == (A::MAX, B::MAX)
+(A, B)::Output == (A::Output, B::Output)
+```
+
+不存在算术合并等其他语义。N 元组版本即"每个元素调用原方法/取原常量/取原关联类型，结果拼成 N 元组"。
+
+## 2. 辅助 trait：双轨道形态
+
+`#[auto_tuple]` 处理 trait 定义，生成辅助 trait + blanket impl。**每个原 trait 只生成一个辅助 trait**（按轨道判定择一），不重复。
+
+### 2.1 轨道判定（精确遮蔽分析）
+
+- 扫描**被选中项**的签名（方法参数/返回/泛型 bound/方法 where、关联常量类型、关联类型 bound）以及**原 trait 级 where**。
+- 标识符解析规则（与 Rust 遮蔽语义一致）：
+  1. 收集每个方法自身的泛型参数名集合（type/lifetime/const）。
+  2. 签名中出现的标识符：先查方法泛型参数集（命中 → 方法参数，忽略）；再查 trait 泛型参数集（命中 → 引用，触发共享轨道）；均不命中 → 忽略（类型名、关联类型等）。
+- 任一 trait 泛型参数被引用 → **共享轨道**；否则 → **异参轨道（All）**。
+- 未选中的项不参与判定。
+
+### 2.2 共享轨道（签名引用原泛型参数）
+
+```rust
+#[auto_tuple]
+trait Tr<T> {
+    fn g(x: &T) -> T;
+    fn foo() -> Box<Self>;
+    type Output;
+}
+
+trait _TrTuple2<A, B, T>
+where
+    A: Tr<T>,
+    B: Tr<T>,
+{
+    fn g(x: &T) -> (T, T);
+    fn foo() -> (Box<A>, Box<B>);
+    type Output;                     // 仅用户显式选中时生成
+}
+
+impl<T, A: Tr<T>, B: Tr<T>> _TrTuple2<T, A, B> for (A, B) {
+    fn g(x: &T) -> (T, T) { (A::g(x), B::g(x)) }
+    fn foo() -> (Box<A>, Box<B>) { (A::foo(), B::foo()) }
+    type Output = (A::Output, B::Output);
+}
+```
+
+- 辅助 trait 泛型参数 = **元素参数（N 个，恒有，N≥1）+ 原 trait 全部泛型参数（按原序）**。
+- 元素 bound `A_i: Tr<原参数...>` 恒写（0 元组除外）。
+- A、B 共享同一参数化（语义收窄：异参不可行，见 §2.3 反向说明）。
+
+### 2.3 异参轨道 / All（签名不引用原泛型参数）
+
+```rust
+#[auto_tuple]
+trait Tr<T> {
+    fn foo() -> Box<Self>;
+    fn h() -> Self::Output;
+    type Output;
+}
+
+trait _TrTuple2All<A, B, TA, TB>
+where
+    A: Tr<TA>,
+    B: Tr<TB>,
+{
+    fn foo() -> (Box<A>, Box<B>);
+    fn h() -> (A::Output, B::Output);
+    type Output;
+}
+
+impl<TA, A: Tr<TA>, TB, B: Tr<TB>> _TrTuple2All<A, B, TA, TB> for (A, B) {
+    fn foo() -> (Box<A>, Box<B>) { (A::foo(), B::foo()) }
+    fn h() -> (A::Output, B::Output) { (A::h(), B::h()) }
+    type Output = (A::Output, B::Output);
+}
+```
+
+- 辅助 trait 泛型参数 = **元素参数 + 每元素各自的 Tr 参数（TA/TB，按元素序）**。
+- 元素 bound `A: Tr<TA>, B: Tr<TB>` 允许**异参**（`A: Tr<i32>, B: Tr<String>`）。
+- TA/TB 不出现在方法签名中，方法调用时由 `A0: Tr<?>` 约束反推；唯一则行、多则歧义（与直接调用 `A0::foo()` 行为一致）。歧义时可用 UFCS 显式指定消歧：
+
+  ```rust
+  <(A0, B0) as _TrTuple2All<A0, B0, i32, String>>::foo()
+  ```
+
+  （这正是保留 TA/TB 的理由：简化版无逃生舱。）
+
+### 2.4 轨道差异汇总
+
+| | 共享 | All |
+|---|---|---|
+| 触发 | 选中项签名引用原泛型参数 | 不引用 |
+| 泛型参数 | 元素 + 原参数（共享） | 元素 + 各自 Tr 参数（异参） |
+| 元素 bound | `A: Tr<T>` | `A: Tr<TA>` |
+| 调用推断 | T 由签名提供或反推 | TA/TB 反推 |
+| 歧义逃生 | UFCS 指定 T | UFCS 指定 TA/TB |
+
+## 3. 类型重写规则
+
+两条轨道共用同一套重写规则，仅辅助 trait 头的参数集不同。
+
+### 3.1 返回方向（逐元素）
+
+`Ret` → `(Elem(Ret, 0), ..., Elem(Ret, N-1))`，`Elem(T, i)` 递归定义：
+
+```
+Elem(Self, i)        = A_i            // 元素参数
+Elem(Self::Assoc, i) = A_i::Assoc     // 元素投影
+Elem(X, i)           = X              // X 为原泛型参数/方法泛型参数/具体类型：原样
+Elem(&T, i)          = &Elem(T, i)    // 引用/容器/元组递归
+Elem(Box<T>, i)      = Box<Elem(T, i)>
+Elem(Vec<T>, i)      = Vec<Elem(T, i)>
+Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
+```
+
+- `fn f(&self) -> &Self` → `(&A, &B)`；`-> Box<Self>` → `(Box<A>, Box<B>)`；`-> Self` → `(A, B)`。
+- lifetime 原样保留（含 elision；`(&A, &B)` 的 elided lifetime 绑定 `&self`，合法）。
+- `fn foo();`（无返回类型）→ `-> ((), ())`。
+
+### 3.2 参数方向（元组整体 + 拆包）
+
+- 非 Self 相关参数：**原样**（`x: &T`、`x: usize` 等），转发时原样传给每个元素。
+- Self 相关参数（TSR，一层）：辅助 trait 中保持原样（`Self` 即元组整体、`Self::Assoc` 展开为元素投影元组），impl 转发时**结构性拆包**：
+
+  ```rust
+  fn f(&self, x: &Self)     { (self.0.f(&x.0), self.1.f(&x.1)) }
+  fn g(&mut self, x: &mut Self) { (self.0.g(&mut x.0), self.1.g(&mut x.1)) }
+  fn h(x: Self)             { (self.0.h(x.0), self.1.h(x.1)) }   // 不同字段分别移动，合法
+  fn k(x: Self::Output)     { (self.0.k(x.0), self.1.k(x.1)) }
+  ```
+
+- TSR 集合：`Self`、`Self::Assoc`、`&Self`、`&mut Self`、`&Self::Assoc`、`&mut Self::Assoc`。
+- **嵌套容器中的 Self 作参数**（`Box<Self>`、`Vec<Self>`、`(Self, T)`）→ 无法拆包，compile_error。
+
+### 3.3 机械重写铁律
+
+> 只做结构变换（Self → 元素参数、包元组、拆包），**绝不改写任何泛型参数标识符**。
+
+方法泛型参数遮蔽 trait 泛型参数（`fn g<T>(x: T)`）时，标识符落到哪层由 Rust 解析器按遮蔽规则决定，机械重写天然保留正确语义。元素参数必须用独特前缀名（`__T0` 等），避免与任何用户标识符撞名。
+
+## 4. 各项生成规则
+
+### 4.1 方法
+
+- 任意形态：`&self` / `&mut self` / `self` / 关联函数 / 泛型方法 / 带 where / 带 lifetime。
+- 转发 body 按 §3 规则生成。
+- **按值参数**（非 TSR）：直接原样生成 `(A::g(x), B::g(x))`，**不做 Copy/Clone 预判**——是 Copy 则编译通过，否则 E0382 由编译器报告（宏无法静态判断具体类型是否 Copy，也不自动加 bound 改变语义）。
+- `&mut T` 参数：reborrow 转发 `(self.0.g(&mut *x), self.1.g(&mut *x))`。
+- 默认方法（带 body）：辅助 trait 中**无 body**，body 由生成的 impl 给出；原默认实现经 `self.0.foo()` 自然继承。
+- `async fn`：顺序 await，`(self.0.foo(x).await, self.1.foo(x).await)`。
+- `unsafe fn`：辅助 trait 保留 `unsafe`，生成的 impl body 显式 `unsafe {}` 块（edition 2024 无隐式 unsafe body）。
+- `unsafe trait`：辅助 trait 标 `unsafe`，impl 为 `unsafe impl`。
+
+### 4.2 关联常量
+
+- 类型按 §3.1 元组化（`usize` → `(usize, usize)`；`Self` → `(A, B)`；`T` → `(T, T)`）。
+- 值逐元素：`const MAX: (usize, usize) = (A::MAX, B::MAX);`（const 上下文合法）。
+- **默认不处理**，仅用户显式指定时生成。
+
+### 4.3 关联类型
+
+- 辅助 trait 声明 `type Output;`（无默认），impl 给定 `type Output = (A::Output, B::Output);`。
+- 方法签名中的 `Self::Output` 展开为元素投影 `(A::Output, B::Output)`（bound 已满足，无需辅助 trait 自带关联类型）。
+- **原 bound 保留**：`type Output: Clone;` → 辅助 trait 保留 bound，impl where 自动附加元素化版本（`A::Output: Clone, B::Output: Clone`；0 元组恒真）。
+- **默认不处理**，仅用户显式指定时生成。
+
+### 4.4 方法级 / trait 级 where
+
+- `where Self: Foo` → 拆分为 `where A: Foo, B: Foo`（1 元组单个，0 元组删除）。
+- `where Self: Sized` → 元素化后恒真，无害。
+- 复杂嵌套（`where Vec<Self>: Foo`）→ compile_error。
+- 原 trait 级 where 原样复制进辅助 trait 与 impl。
+
+### 4.5 impl where 完整性
+
+impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参数 bound、元素 bound、元素化关联类型 bound）+ 原 trait where。
+
+## 5. 元数与范围
+
+- 默认 `2..=12`；支持 `2..12`、`0..=12`、`1..=3` 等（严格按 Rust 范围语义）。
+- 0 元组：`_TrTuple0<T>` / `_TrTuple0All`（无参数）。无元素 bound。方法返回 `()`、body 空（不调用任何元素）；常量 `= ()`；关联类型 `= ()`。
+- 1 元组：`_TrTuple1<A, T> where A: Tr<T>` / `_TrTuple1All<A, TA> where A: Tr<TA>`。语法注意 `(A,)`、`(T,)`、`(expr,)` 补逗号。
+- 1 元组按值参数只调用一次，无移动问题；0 元组不调用。
+
+## 6. 遮蔽与标识符
+
+- 重写器不改标识符（§3.3），遮蔽语义天然正确。
+- 轨道判定用精确遮蔽分析（§2.1）：`fn g<T>(x: T)` 的方法 T 不触发共享，正确进入 All 轨道；`fn h(x: T)`（trait T）触发共享。混合场景（g 遮蔽 + h 引用）整体走共享，遮蔽方法不受影响。
+- 元素参数独特前缀名（`__T0`、`__T1`…），共享轨道元素 bound 用 where 子句（`trait _TrTuple2<A, B, T = i32> where A: Tr<T>, B: Tr<T>`，默认值参数放最后）。
+
+## 7. 命名与可见性
+
+- 共享：`{Trait}Tuple{N}`；异参：`{Trait}Tuple{N}All`。
+- 生成在原 trait 所在模块，可见性与原 trait 相同（pub trait → pub 辅助 trait），`#[doc(hidden)]`。
+- 可命名覆盖（同时覆盖两个轨道名）。
+- 跨模块同名 trait 不冲突（模块隔离）；用户手动实现同名辅助 trait → E0119，文档约定 + 可命名规避。
+
+## 8. 错误处理（compile_error）
+
+- 非法范围 / 非法筛选语法 / 指定的项不存在。
+- 参数方向嵌套容器 Self。
+- where 中复杂 Self 嵌套。
+- auto trait。
+- RPIT 返回（`impl Trait`）——v1 不支持（opaque 归属语义复杂），compile_error。
+- 空选择集提示。
+
+## 9. 不支持边界（交给编译器）
+
+- 按值参数非 Copy（E0382，编译器报告）。
+- 泛型 async fn（若工具链不支持，编译器报告）。
+- 重复 `#[auto_tuple]`（E0428 重复定义，编译器报告）。
+
+## 10. 测试策略
+
+- trybuild 编译测试矩阵：简单/泛型 trait、`&self`/`&mut self`/`self`、关联函数、泛型方法、async、关联常量/类型、筛选、双轨道、0/1 元组、遮蔽场景、默认值、命名冲突。
+- 运行期断言验证逐元素语义（`(A::foo(), B::foo())` 等价性）。
+- 属性解析单元测试（范围、筛选、非法输入）。
+
+## 11. 待验证项（实现时优先）
+
+1. 方法调用 `(a, b).foo()` 与关联函数 `(A, B)::foo()` 的泛型参数推断（共享轨道 T 由签名提供 / All 轨道 TA/TB 反推）——trybuild 实测。
+2. `&Self` 返回 elision 元组化（`(&A, &B)`）。
+3. edition 2024 unsafe body 处理。
+4. 泛型 async fn 在目标工具链的行为。
