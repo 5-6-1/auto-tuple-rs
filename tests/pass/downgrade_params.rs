@@ -1,5 +1,5 @@
-//! Traits with multiple params, lifetimes or const params are downgraded to
-//! the shared track: original params are lifted and shared by all elements.
+//! All track with arbitrary param shapes: each element instantiates `Tr` with
+//! its own parameter group (multiple type params, lifetimes, const params).
 
 use auto_tuple::auto_tuple;
 
@@ -21,12 +21,13 @@ trait WithConst<const N: usize> {
 struct X;
 struct Y;
 
+// Independent parameterizations per element.
 impl Multi<u32, String> for X {
     fn mf(&self) -> usize {
         1
     }
 }
-impl Multi<u32, String> for Y {
+impl Multi<String, u32> for Y {
     fn mf(&self) -> usize {
         2
     }
@@ -48,14 +49,14 @@ impl WithConst<3> for X {
         5
     }
 }
-impl WithConst<3> for Y {
+impl WithConst<7> for Y {
     fn cf(&self) -> usize {
         6
     }
 }
 
 fn main() {
-    use crate::{_MultiTuple2, _WithConstTuple2, _WithLifetimeTuple2};
+    use crate::{_MultiTuple2All, _WithConstTuple2All, _WithLifetimeTuple2All};
 
     assert_eq!((X, Y).mf(), (1, 2));
     assert_eq!((X, Y).lf(), (3, 4));

@@ -1,5 +1,5 @@
 [package]
-name = "auto_tuple"
+name = "auto-tuple"
 version = "0.1.0"
 authors = ["5-6-1 <5-6-1@users.noreply.github.com>"]
 description = "Element-wise tuple-ization for traits: auto-generate tuple helper traits and blanket impls"
@@ -16,3 +16,8 @@ syn = { version = "3", features = ["full", "visit", "visit-mut", "parsing", "pri
 
 [dev-dependencies]
 trybuild = "1"
+
+[lints.rust]
+# 1.97+ 的 linker_messages lint 刻意不在 `warnings` 组；链接器 stdout
+# 噪音对本项目无意义，显式关闭（rust 1.97 / https://blog.rust-lang.org/...）。
+linker_messages = "allow"

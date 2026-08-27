@@ -1,8 +1,9 @@
-# auto_tuple
+# auto-tuple
 
-Element-wise tuple-ization for Rust traits: a `#[auto_tuple]` attribute macro
+Element-wise tuple-ization for Rust traits: an `#[auto_tuple]` attribute macro
 that generates, for each requested arity, a helper trait whose items forward
-element-wise to every element of an N-tuple.
+element-wise to every element of an N-tuple. Package `auto-tuple`, crate
+`auto_tuple`.
 
 ```rust
 use auto_tuple::auto_tuple;

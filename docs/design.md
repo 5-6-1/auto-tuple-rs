@@ -24,8 +24,8 @@
 
 - 扫描**被选中项**的签名（方法参数/返回/泛型 bound/方法 where、关联常量类型、关联类型 bound）以及**原 trait 级 where**。
 - 标识符解析：签名中出现的标识符，排除方法自身的泛型参数名后，命中 trait 泛型参数集 → 引用。类型路径（`visit_path`）与 lifetime（`visit_lifetime`，`&'a str` 场景）都要扫描。方法泛型参数与 trait 泛型参数**同名被 Rust 禁止**（E0403），排除逻辑仅为防御。
-- 任一 trait 泛型参数被引用 → **共享轨道**；否则候选 **异参轨道（All）**。
-- **All 轨道仅限"恰好一个 type 泛型参数"的 trait**：多参数、lifetime、const 泛型参数的 trait 一律降级为共享轨道（保守正确；每元素完整参数组留待后续）。
+- 任一 trait 泛型参数被引用 → **共享轨道**；否则 → **异参轨道（All）**。
+- All 轨道支持**任意参数形状**：每元素生成完整参数组（多 type 参数、lifetime、const 参数各自独立），元素可异参实例化。
 - 未选中的项不参与判定。
 
 ### 2.2 共享轨道（签名引用原泛型参数）
@@ -86,10 +86,10 @@ impl<TA, A: Tr<TA>, TB, B: Tr<TB>> _TrTuple2All<A, B, TA, TB> for (A, B) {
 }
 ```
 
-- 辅助 trait 泛型参数 = **元素参数 + 每元素各自的 Tr 参数（TA/TB，按元素序）**。
-- 元素 bound `A: Tr<TA>, B: Tr<TB>` 允许**异参**（`A: Tr<i32>, B: Tr<String>`）。
-- 原 trait 参数若有 bound（`Tr<T: Clone>`），**转移到每个 `__TA{i}`**（`__TA0: Clone`），保证 `A: Tr<TA>` 的 well-formedness。
-- TA/TB 不出现在方法签名中，方法调用时由 `A0: Tr<?>` 约束反推；唯一则行、多则歧义（与直接调用 `A0::foo()` 行为一致）。歧义时可用 UFCS 显式指定消歧：
+- 辅助 trait 泛型参数 = **元素参数 + 每元素完整参数组**（按元素序、原参数序）：type 参数 `__T{i}_{name}`（原 bounds 转移）、lifetime `'__L{i}_{name}`、const `const __C{i}_{name}: Ty`。
+- 元素 bound `A: Tr<每元素参数组>` 允许**异参**（`A: Tr<i32, S>, B: Tr<String, U>`、`A: Tr<'a1>`、`A: Tr<3>` 各自独立）。
+- 原 trait 参数若有 bound（`Tr<T: Clone>`），**转移到对应每元素参数**（`__T0_T: Clone`），保证 `A: Tr<TA>` 的 well-formedness。
+- 每元素参数不出现在方法签名中，方法调用时由 `A0: Tr<?>` 约束反推；唯一则行、多则歧义（与直接调用 `A0::foo()` 行为一致）。歧义时可用 UFCS 显式指定消歧：
 
   ```rust
   <(A0, B0) as _TrTuple2All<A0, B0, i32, String>>::foo()
@@ -208,7 +208,7 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 - 生成在原 trait 所在模块，可见性与原 trait 相同（pub trait → pub 辅助 trait），`#[doc(hidden)]`。
 - 可命名覆盖（同时覆盖两个轨道名）。
 - 跨模块同名 trait 不冲突（模块隔离）；用户手动实现同名辅助 trait → E0119，文档约定 + 可命名规避。
-- 生成名（元素参数 `__T{i}`、`Tr` 参数 `__TA{i}`、合成参数 `__arg{i}`）自动避让原 trait 参数名与已有参数名。
+- 生成名（元素参数 `__T{i}`、每元素参数组 `__T{i}_{name}`/`'__L{i}_{name}`/`__C{i}_{name}`、合成参数 `__arg{i}`）自动避让原 trait 参数名与已有参数名。
 
 ## 8. 错误处理（compile_error）
 

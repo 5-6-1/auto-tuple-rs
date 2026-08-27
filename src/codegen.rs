@@ -106,9 +106,54 @@ fn elem_params(n: usize, taken: &std::collections::BTreeSet<String>) -> Vec<Iden
     (0..n).map(|i| fresh_param_name(format!("__T{i}"), taken)).collect()
 }
 
-/// Per-element `Tr` parameters `__TA0..__TA{N-1}` (All track only).
-fn tr_params(n: usize, taken: &std::collections::BTreeSet<String>) -> Vec<Ident> {
-    (0..n).map(|i| fresh_param_name(format!("__TA{i}"), taken)).collect()
+/// All-track per-element `Tr` parameter groups, mirroring the original trait
+/// parameter shape: one group per element, one parameter per original
+/// parameter (`__T{i}_{name}` type params with bounds carried over,
+/// `'__L{i}_{name}` lifetimes, `const __C{i}_{name}: Ty` const params).
+///
+/// Returns the generic params to declare (helper trait and impl) and, per
+/// element, the name tokens used in bounds and instantiations.
+fn all_track_params(
+    trait_: &ItemTrait, n: usize, taken: &std::collections::BTreeSet<String>,
+) -> (Vec<GenericParam>, Vec<Vec<TokenStream>>) {
+    let mut params = Vec::new();
+    let mut per_elem = Vec::new();
+    for i in 0..n {
+        let mut names = Vec::new();
+        for orig in &trait_.generics.params {
+            match orig {
+                GenericParam::Type(t) => {
+                    let name = fresh_param_name(format!("__T{i}_{}", t.ident), taken);
+                    let mut tp: GenericParam = parse_quote!(#name);
+                    if let GenericParam::Type(tp) = &mut tp {
+                        tp.bounds = t.bounds.clone();
+                    }
+                    params.push(tp);
+                    names.push(quote!(#name));
+                }
+                GenericParam::Lifetime(l) => {
+                    let name = fresh_param_name(format!("__L{i}_{}", l.lifetime.ident), taken);
+                    let lt =
+                        syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site());
+                    params.push(GenericParam::Lifetime(syn::LifetimeParam {
+                        attrs: Vec::new(),
+                        lifetime: lt.clone(),
+                        colon_token: None,
+                        bounds: Default::default(),
+                    }));
+                    names.push(quote!(#lt));
+                }
+                GenericParam::Const(c) => {
+                    let name = fresh_param_name(format!("__C{i}_{}", c.ident), taken);
+                    let ty = &c.ty;
+                    params.push(parse_quote!(const #name: #ty));
+                    names.push(quote!(#name));
+                }
+            }
+        }
+        per_elem.push(names);
+    }
+    (params, per_elem)
 }
 
 fn fresh_param_name(base: String, taken: &std::collections::BTreeSet<String>) -> Ident {
@@ -233,53 +278,45 @@ fn build_helper_trait(
     let has_orig_params = !trait_.generics.params.is_empty();
     let taken = trait_param_names(&trait_.generics);
     let elems = elem_params(n, &taken);
-    let tr_params_ = tr_params(n, &taken);
     let name = helper_name(trait_, n, track, has_orig_params);
     let tr = &trait_.ident;
 
     let mut generics = trait_.generics.clone();
     let mut params: Vec<GenericParam> = elems.iter().map(|e| parse_quote!(#e)).collect();
-    match track {
-        Track::Shared => params.extend(generics.params.iter().cloned()),
-        Track::All if has_orig_params => {
-            // The single original type param's bounds carry over to each
-            // element's `Tr` param (`Tr<T: Clone>` needs `__TA{i}: Clone`).
-            let orig_bounds = match trait_.generics.params.first() {
-                Some(GenericParam::Type(t)) => t.bounds.clone(),
-                _ => unreachable!("All track implies a single type param"),
-            };
-            for p in &tr_params_ {
-                let mut ta: GenericParam = parse_quote!(#p);
-                if let GenericParam::Type(tp) = &mut ta {
-                    tp.bounds = orig_bounds.clone();
-                }
-                params.push(ta);
-            }
+    let all_per_elem: Vec<Vec<TokenStream>> = match track {
+        Track::Shared => {
+            params.extend(generics.params.iter().cloned());
+            Vec::new()
         }
-        Track::All => {}
-    }
+        Track::All if has_orig_params => {
+            let (mut group, per_elem) = all_track_params(trait_, n, &taken);
+            params.append(&mut group);
+            per_elem
+        }
+        Track::All => Vec::new(),
+    };
     generics.params = params.into_iter().collect();
 
     let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, n, &elems)?
         .map(|wc| wc.predicates.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();
     let orig_names = param_name_tokens(&trait_.generics.params);
-    if has_orig_params {
-        match track {
-            Track::Shared => {
-                for e in &elems {
-                    predicates.push(parse_quote!(#e: #tr<#(#orig_names),*>));
-                }
-            }
-            Track::All => {
-                for (e, p) in elems.iter().zip(&tr_params_) {
-                    predicates.push(parse_quote!(#e: #tr<#p>));
-                }
+    match track {
+        Track::Shared => {
+            for e in &elems {
+                predicates.push(parse_quote!(#e: #tr<#(#orig_names),*>));
             }
         }
-    } else {
-        for e in &elems {
-            predicates.push(parse_quote!(#e: #tr));
+        Track::All if has_orig_params => {
+            for (i, e) in elems.iter().enumerate() {
+                let names = &all_per_elem[i];
+                predicates.push(parse_quote!(#e: #tr<#(#names),*>));
+            }
+        }
+        _ => {
+            for e in &elems {
+                predicates.push(parse_quote!(#e: #tr));
+            }
         }
     }
     if !predicates.is_empty() {
@@ -317,43 +354,39 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
     let has_orig_params = !trait_.generics.params.is_empty();
     let taken = trait_param_names(&trait_.generics);
     let elems = elem_params(n, &taken);
-    let tr_params_ = tr_params(n, &taken);
     let name = helper_name(trait_, n, track, has_orig_params);
     let tr = &trait_.ident;
 
     let orig_params = trait_.generics.params.iter().cloned().collect::<Vec<_>>();
     let orig_names = param_name_tokens(&trait_.generics.params);
 
-    let mut impl_params: Vec<GenericParam> = if has_orig_params {
-        match track {
-            Track::Shared => {
-                let mut v = orig_params.clone();
-                for e in &elems {
-                    v.push(parse_quote!(#e: #tr<#(#orig_names),*>));
-                }
-                v
-            }
-            Track::All => {
-                // Element `Tr` params carry the original type param's bounds.
-                let orig_bounds = match trait_.generics.params.first() {
-                    Some(GenericParam::Type(t)) => t.bounds.clone(),
-                    _ => unreachable!("All track implies a single type param"),
-                };
-                let mut v = Vec::new();
-                for (e, p) in elems.iter().zip(&tr_params_) {
-                    let mut ta: GenericParam = parse_quote!(#p);
-                    if let GenericParam::Type(tp) = &mut ta {
-                        tp.bounds = orig_bounds.clone();
+    let (mut impl_params, all_per_elem): (Vec<GenericParam>, Vec<Vec<TokenStream>>) =
+        if has_orig_params {
+            match track {
+                Track::Shared => (
+                    {
+                        let mut v = orig_params.clone();
+                        for e in &elems {
+                            v.push(parse_quote!(#e: #tr<#(#orig_names),*>));
+                        }
+                        v
+                    },
+                    Vec::new(),
+                ),
+                Track::All => {
+                    let (mut group, per_elem) = all_track_params(trait_, n, &taken);
+                    let mut v = Vec::new();
+                    v.append(&mut group);
+                    for (i, e) in elems.iter().enumerate() {
+                        let names = &per_elem[i];
+                        v.push(parse_quote!(#e: #tr<#(#names),*>));
                     }
-                    v.push(ta);
-                    v.push(parse_quote!(#e: #tr<#p>));
+                    (v, per_elem)
                 }
-                v
             }
-        }
-    } else {
-        elems.iter().map(|e| parse_quote!(#e: #tr)).collect()
-    };
+        } else {
+            (elems.iter().map(|e| parse_quote!(#e: #tr)).collect(), Vec::new())
+        };
     // Impl generic params cannot carry default values.
     for p in &mut impl_params {
         if let GenericParam::Type(t) = p {
@@ -378,12 +411,13 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
         generics.where_clause = Some(parse_quote!(where #(#predicates),*));
     }
 
+    let all_names: Vec<TokenStream> = all_per_elem.iter().flatten().cloned().collect();
     let helper_path: syn::Path = match (has_orig_params, track) {
         (false, _) => parse_quote!(#name<#(#elems),*>),
         (true, Track::Shared) if elems.is_empty() && orig_names.is_empty() => parse_quote!(#name),
-        (true, Track::All) if elems.is_empty() && tr_params_.is_empty() => parse_quote!(#name),
+        (true, Track::All) if elems.is_empty() && all_names.is_empty() => parse_quote!(#name),
         (true, Track::Shared) => parse_quote!(#name<#(#elems),*, #(#orig_names),*>),
-        (true, Track::All) => parse_quote!(#name<#(#elems),*, #(#tr_params_),*>),
+        (true, Track::All) => parse_quote!(#name<#(#elems),*, #(#all_names),*>),
     };
     let self_ty = tuple_type(n, &elems);
 
@@ -623,4 +657,32 @@ fn elem_typed_bounds(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn const_param_all_track_generates() {
+        // Regression: `#c.ty` inside quote! used to emit a literal `.ty`
+        // suffix, breaking `const __C{i}_{name}: Ty` generation.
+        let trait_: ItemTrait = parse_quote! {
+            trait WithConst<const N: usize> {
+                fn cf(&self) -> usize;
+            }
+        };
+        let methods = trait_
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                TraitItem::Fn(f) => Some(f),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
+        let out = generate(&trait_, Track::All, &sel, 2).unwrap();
+        assert!(!out.to_string().is_empty());
+    }
 }
