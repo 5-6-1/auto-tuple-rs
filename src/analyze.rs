@@ -32,13 +32,24 @@ pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
     let mut scanner =
         Scanner { trait_params: &trait_params, method_params: &BTreeSet::new(), hit: false };
     for param in &trait_.generics.params {
-        if let GenericParam::Type(tp) = param {
-            for bound in &tp.bounds {
-                scanner.visit_type_param_bound(bound);
+        match param {
+            GenericParam::Type(tp) => {
+                for bound in &tp.bounds {
+                    scanner.visit_type_param_bound(bound);
+                }
+                if let Some((_, default)) = &tp.default {
+                    scanner.visit_type(default);
+                }
             }
-            if let Some((_, default)) = &tp.default {
-                scanner.visit_type(default);
+            // A lifetime param with bounds (`'b: 'a` or `'b: 'static`) cannot
+            // be expressed per-element in the All track; force the shared
+            // track, which lifts the original params as-is.
+            GenericParam::Lifetime(lp) => {
+                if !lp.bounds.is_empty() {
+                    scanner.hit = true;
+                }
             }
+            GenericParam::Const(_) => {}
         }
     }
     if let Some(wc) = &trait_.generics.where_clause {

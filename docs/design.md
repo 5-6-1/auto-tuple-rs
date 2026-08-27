@@ -26,6 +26,7 @@
 - 标识符解析：签名中出现的标识符，排除方法自身的泛型参数名后，命中 trait 泛型参数集 → 引用。类型路径（`visit_path`）与 lifetime（`visit_lifetime`，`&'a str` 场景）都要扫描。方法泛型参数与 trait 泛型参数**同名被 Rust 禁止**（E0403），排除逻辑仅为防御。
 - 任一 trait 泛型参数被引用 → **共享轨道**；否则 → **异参轨道（All）**。
 - All 轨道支持**任意参数形状**：每元素生成完整参数组（多 type 参数、lifetime、const 参数各自独立），元素可异参实例化。
+- **带 bound 的 lifetime 参数**（`'b: 'a` / `'b: 'static`）→ 强制共享轨道（All 轨道无法逐元素表达 lifetime bound，保守正确）。
 - 未选中的项不参与判定。
 
 ### 2.2 共享轨道（签名引用原泛型参数）
@@ -161,6 +162,7 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 - 默认方法（带 body）：辅助 trait 中**无 body**，body 由生成的 impl 给出；原默认实现经 `self.0.foo()` 自然继承。
 - `async fn`：顺序 await，`(self.0.foo(x).await, self.1.foo(x).await)`。
 - `impl Trait`（RPIT）返回：逐元素展开为每个元素一个 opaque，`-> impl Iterator<Item = Self>` → `(impl Iterator<Item = A>, impl Iterator<Item = B>)`；impl 的隐藏类型是元素各自 `Tr::foo` 的 opaque（已验证可行）。
+- 多层关联投影（`Self::Output::Item`）在返回类型与 where 主语中逐元素化为 `A::Output::Item`——Rust 对泛型参数上的嵌套投影有固有限制（E0223，与裸写 `T::Out::Item` 一致）；消除需 UFCS 形式（`<<A as Tr>::Output as Iterator>::Item`），列为后续增强。
 - `unsafe fn`：辅助 trait 保留 `unsafe`，生成的 impl body 显式 `unsafe {}` 块（edition 2024 无隐式 unsafe body）。
 - `unsafe trait`：辅助 trait 标 `unsafe`，impl 为 `unsafe impl`。
 
@@ -174,7 +176,7 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 
 - 辅助 trait 声明 `type Output;`（无默认），impl 给定 `type Output = (A::Output, B::Output);`。
 - 方法签名中的 `Self::Output` 展开为元素投影 `(A::Output, B::Output)`（bound 已满足，无需辅助 trait 自带关联类型）。
-- **原 bound 处理**：不含 `Self` 且不含原泛型参数的 bound（`type Output: Clone;`）→ 辅助 trait 保留，impl where 自动附加元素化版本（`A::Output: Clone, B::Output: Clone`；0 元组恒真）。**含 `Self` 或原泛型参数的 bound**（`AsRef<T>`、`Into<Self>`）→ 从辅助 trait 删除（元组值无法满足，元素侧已由 `A: Tr<...>` 保证）。
+- **原 bound 处理（白名单）**：辅助 trait 的关联类型 bound 只保留**元组必然满足**的（`Clone`/`Copy`/`PartialEq`/`Eq`/`PartialOrd`/`Ord`/`Hash`/`Debug`/`Default`/`Sized` 无参形式、lifetime）。其余一律删除（`Iterator`、`Add`、`AsRef<T>`、含 `Self`/原参数的 bound）——元组值无法满足，元素侧已由 `A: Tr<...>` 保证。
 - **默认不处理**，仅用户显式指定时生成。
 
 ### 4.4 方法级 / trait 级 where

@@ -76,10 +76,10 @@ parameter:
 
 | | Shared | All |
 |---|---|---|
-| Trigger | signature references an original generic param, or the trait has no / multiple / non-type generic params | exactly one type generic param, never referenced by selected items |
-| Helper trait | `_TrTuple2<__T0, __T1, T> where __T0: Tr<T>, __T1: Tr<T>` | `_TrTuple2All<__T0, __T1, __TA0, __TA1> where __T0: Tr<__TA0>, __T1: Tr<__TA1>` |
-| Element params | shared `T` | independent `__TA0`/`__TA1` (`A: Tr<i32>, B: Tr<String>` allowed) |
-| Bounds | original params lifted as-is | original type param's bounds carry to `__TA{i}` (`Tr<T: Clone>` → `__TA0: Clone`) |
+| Trigger | a selected item's signature references an original generic param | no selected item references the original generic params (any shape: multiple type params, lifetimes, const params) |
+| Helper trait | `_TrTuple2<__T0, __T1, T> where __T0: Tr<T>, __T1: Tr<T>` | `_TrTuple2All<__T0, __T1, <per-element param groups>> where __T0: Tr<...>, __T1: Tr<...>` |
+| Element params | shared original params | one independent param group per element (`A: Tr<i32, S>, B: Tr<String, U>` allowed) |
+| Bounds | original params lifted as-is | original type param bounds carry to the element group (`Tr<T: Clone>` → per-element `Clone`) |
 | Arity 0/1 names | `_TrTuple0` / `_TrTuple1` | `_TrTuple0All` / `_TrTuple1All` |
 
 Traits without generic parameters always use the plain name and an

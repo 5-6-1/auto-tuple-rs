@@ -27,6 +27,46 @@ fn trait_param_names(generics: &syn::Generics) -> std::collections::BTreeSet<Str
         .collect()
 }
 
+/// Whether a bound should be kept (element-wise) on the helper trait.
+///
+/// The helper trait's associated value is the element tuple, so a bound is
+/// kept only if the tuple provably satisfies it: whitelisted arg-less traits
+/// (`Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`, `Debug`,
+/// `Default`, `Sized`) or lifetimes. Everything else — traits with args
+/// (`AsRef<T>`), non-whitelisted traits (`Iterator`, `Add`, ...), and any
+/// bound mentioning `Self` or an original trait generic param — is dropped:
+/// the element side is already guaranteed by `A: Tr<...>`.
+fn keep_elem_bound(
+    bound: &syn::TypeParamBound, trait_params: &std::collections::BTreeSet<String>,
+) -> bool {
+    if bound_mentions_self_or_params(bound, trait_params) {
+        return false;
+    }
+    match bound {
+        syn::TypeParamBound::Lifetime(_) => true,
+        syn::TypeParamBound::Trait(tb) => {
+            let Some(seg) = tb.path.segments.last() else {
+                return false;
+            };
+            let whitelisted = matches!(
+                seg.ident.to_string().as_str(),
+                "Clone"
+                    | "Copy"
+                    | "PartialEq"
+                    | "Eq"
+                    | "PartialOrd"
+                    | "Ord"
+                    | "Hash"
+                    | "Debug"
+                    | "Default"
+                    | "Sized"
+            );
+            whitelisted && matches!(seg.arguments, syn::PathArguments::None)
+        }
+        _ => false,
+    }
+}
+
 /// Whether a bound mentions `Self` or an original trait generic parameter.
 ///
 /// Such bounds cannot be kept on the helper trait: its associated value is the
@@ -236,22 +276,14 @@ fn rewrite_where_clause(
             WherePredicate::Type(pt) if matches!(&pt.bounded_ty, Type::Path(tp) if rewrite::is_self_assoc(tp)) =>
             {
                 // `where Self::Output: Clone` -> per-element projections
-                // `A::Output: Clone, B::Output: Clone`.
-                let Type::Path(tp) = &pt.bounded_ty else {
-                    return Err(syn::Error::new_spanned(
-                        p,
-                        "unsupported `Self::Assoc` where clause subject",
-                    ));
-                };
-                let Some(assoc) = rewrite::self_assoc_name(tp) else {
-                    return Err(syn::Error::new_spanned(
-                        p,
-                        "unsupported `Self::Assoc` where clause subject",
-                    ));
-                };
+                // `A::Output: Clone, B::Output: Clone`. The subject is
+                // rewritten by replacing the leading `Self` segment (same rule
+                // as return types), so multi-level projections keep their full
+                // path: `Self::Output::Item` -> `A::Output::Item`.
                 for e in elems {
+                    let subject: Type = rewrite::elem_of(&pt.bounded_ty, e);
                     let bounds = &pt.bounds;
-                    out.push(parse_quote!(#e::#assoc: #bounds));
+                    out.push(parse_quote!(#subject: #bounds));
                 }
                 continue;
             }
@@ -609,15 +641,9 @@ fn gen_helper_type(
         ));
     }
     let mut t = item.clone();
-    // Drop bounds mentioning `Self` or an original trait generic param: the
-    // helper trait's associated value is the element tuple, which cannot
-    // satisfy them; the element side is guaranteed by `A: Tr<...>`.
-    t.bounds = item
-        .bounds
-        .iter()
-        .filter(|b| !bound_mentions_self_or_params(b, trait_params))
-        .cloned()
-        .collect();
+    // Keep only bounds the element tuple provably satisfies (whitelist); the
+    // rest are dropped — the element side is guaranteed by `A: Tr<...>`.
+    t.bounds = item.bounds.iter().filter(|b| keep_elem_bound(b, trait_params)).cloned().collect();
     t.default = None;
     Ok(t)
 }
@@ -634,15 +660,15 @@ fn gen_impl_type(item: &TraitItemType, n: usize, elems: &[Ident]) -> Result<Impl
 
 /// Element-wise copies of an associated type's bounds, e.g. `A::Output: Clone`.
 ///
-/// Bounds mentioning `Self` or an original trait generic param are skipped:
-/// they are guaranteed by `A: Tr<...>` on the element side.
+/// Only whitelisted bounds (which the tuple provably satisfies) are copied;
+/// the rest are guaranteed by `A: Tr<...>` on the element side.
 fn elem_typed_bounds(
     item: &TraitItemType, elems: &[Ident], trait_params: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<WherePredicate>> {
     let name = &item.ident;
     let mut out = Vec::new();
     for b in &item.bounds {
-        if bound_mentions_self_or_params(b, trait_params) {
+        if !keep_elem_bound(b, trait_params) {
             continue;
         }
         let bound = match b {
@@ -684,5 +710,36 @@ mod tests {
         let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
         let out = generate(&trait_, Track::All, &sel, 2).unwrap();
         assert!(!out.to_string().is_empty());
+    }
+
+    #[test]
+    fn where_projection_replaces_leading_self() {
+        // `Self::Output::Item: Clone` must become `A::Output::Item: Clone`,
+        // not `A::Item: Clone` (multi-level projection).
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr {
+                fn get(&self)
+                where
+                    Self::Output::Item: Clone;
+            }
+        };
+        let methods = trait_
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                TraitItem::Fn(f) => Some(f),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
+        let out = generate(&trait_, Track::All, &sel, 2).unwrap().to_string();
+        assert!(
+            out.contains("__T0 :: Output :: Item : Clone"),
+            "expected per-element projection, got: {out}"
+        );
+        assert!(
+            !out.contains("__T0 :: Item : Clone"),
+            "must not drop intermediate projection: {out}"
+        );
     }
 }

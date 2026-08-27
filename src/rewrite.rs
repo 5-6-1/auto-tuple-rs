@@ -131,11 +131,6 @@ pub(crate) fn is_self_assoc(tp: &syn::TypePath) -> bool {
     }
 }
 
-/// The assoc-name of a `Self::Assoc...` path, e.g. `Output` in `Self::Output`.
-pub(crate) fn self_assoc_name(tp: &syn::TypePath) -> Option<Ident> {
-    tp.path.segments.last().map(|s| s.ident.clone())
-}
-
 fn path_starts_with_self(path: &syn::Path) -> bool {
     path.segments.len() > 1 && path.segments.first().is_some_and(|s| s.ident == "Self")
 }
