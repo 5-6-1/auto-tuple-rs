@@ -131,6 +131,11 @@ See [`docs/design.md`](docs/design.md) for the full design: semantics,
 two-track decision procedure, type rewriting rules, error handling and the
 edge-case matrix.
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the commit convention and the
+quality gate.
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

@@ -1,0 +1,2 @@
+# Normalize line endings to LF in the working tree and repository.
+* text=auto eol=lf

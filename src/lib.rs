@@ -4,6 +4,26 @@
 //! methods/consts/types forward element-wise to each element of an N-tuple:
 //! `(x, y).foo(a)` desugars to `(x.foo(a), y.foo(a))`. See `docs/design.md`
 //! for the full semantics.
+//!
+//! ```ignore
+//! use auto_tuple::auto_tuple;
+//!
+//! #[auto_tuple]
+//! trait Tr {
+//!     fn zero() -> usize;
+//! }
+//!
+//! struct X;
+//! struct Y;
+//!
+//! impl Tr for X { fn zero() -> usize { 1 } }
+//! impl Tr for Y { fn zero() -> usize { 2 } }
+//!
+//! # fn main() {
+//! use auto_tuple::_TrTuple2;   // helper trait must be in scope
+//! assert_eq!(<(X, Y)>::zero(), (1, 2));
+//! # }
+//! ```
 
 mod analyze;
 mod attr;

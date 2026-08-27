@@ -1,2 +1,4 @@
+# Pin the toolchain. `stable` currently resolves to 1.98 (2026-08-18); the
+# crate's `rust-version` records the minimum.
 [toolchain]
 channel = "stable"

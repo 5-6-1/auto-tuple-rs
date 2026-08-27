@@ -1,3 +1,14 @@
+# Build artifacts
 /target
+
+# Editor / IDE local configuration
+/.idea
+
+# Rust backup files
 **/*.rs.bk
+
+# Cargo.lock is intentionally not tracked for a library crate
 Cargo.lock
+
+# trybuild working directory (accepted .stderr baselines live in tests/fail/)
+/wip

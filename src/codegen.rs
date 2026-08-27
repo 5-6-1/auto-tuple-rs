@@ -252,9 +252,7 @@ fn tuple_type(n: usize, elems: &[Ident]) -> Type {
 
 /// Rewrites a where clause for the helper side: `Self: Foo` splits into one
 /// predicate per element; `Self` in any other position is rejected.
-fn rewrite_where_clause(
-    wc: &Option<WhereClause>, _n: usize, elems: &[Ident],
-) -> Result<Option<WhereClause>> {
+fn rewrite_where_clause(wc: &Option<WhereClause>, elems: &[Ident]) -> Result<Option<WhereClause>> {
     let Some(wc) = wc else {
         return Ok(None);
     };
@@ -329,7 +327,7 @@ fn build_helper_trait(
     };
     generics.params = params.into_iter().collect();
 
-    let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, n, &elems)?
+    let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, &elems)?
         .map(|wc| wc.predicates.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();
     let orig_names = param_name_tokens(&trait_.generics.params);
@@ -426,7 +424,7 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
         }
     }
 
-    let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, n, &elems)?
+    let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, &elems)?
         .map(|wc| wc.predicates.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();
     let trait_params = trait_param_names(&trait_.generics);
@@ -529,7 +527,7 @@ fn rewrite_signature(sig: &mut Signature, n: usize, elems: &[Ident]) -> Result<(
         }
     }
 
-    sig.generics.where_clause = rewrite_where_clause(&sig.generics.where_clause, n, elems)?;
+    sig.generics.where_clause = rewrite_where_clause(&sig.generics.where_clause, elems)?;
     Ok(())
 }
 
