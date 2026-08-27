@@ -1,0 +1,5 @@
+error: `Self` nested inside a generic type is not supported in parameters
+ --> tests/fail/nested_self_param.rs:7:13
+  |
+7 |     fn f(x: Box<Self>);
+  |             ^^^^^^^^^

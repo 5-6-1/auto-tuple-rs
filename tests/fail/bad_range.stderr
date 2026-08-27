@@ -1,0 +1,7 @@
+error: unexpected end of input, range start must not exceed its end
+ --> tests/fail/bad_range.rs:5:1
+  |
+5 | #[auto_tuple(5..=2)]
+  | ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `auto_tuple` (in Nightly builds, run with -Z macro-backtrace for more info)

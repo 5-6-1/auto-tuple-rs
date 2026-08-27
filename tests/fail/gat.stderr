@@ -1,0 +1,5 @@
+error: generic associated types are not supported
+ --> tests/fail/gat.rs:7:16
+  |
+7 |     type Output<T>;
+  |                ^^^

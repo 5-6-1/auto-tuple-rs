@@ -1,16 +1,18 @@
 [package]
 name = "auto_tuple"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["5-6-1 <5-6-1@users.noreply.github.com>"]
-description = "A `cargo generate` template for quick-starting a procedural macro crate"
-keywords = ["template", "proc_macro", "procmacro"]
-edition = "2018"
+description = "Element-wise tuple-ization for traits: auto-generate tuple helper traits and blanket impls"
+keywords = ["proc_macro", "tuple", "trait"]
+edition = "2024"
 
 [lib]
 proc-macro = true
 
 [dependencies]
-quote = "1"
 proc-macro2 = "1.0"
-syn = "1.0"
+quote = "1"
+syn = { version = "3", features = ["full", "visit", "visit-mut", "parsing", "printing", "clone-impls", "proc-macro"] }
 
+[dev-dependencies]
+trybuild = "1"
