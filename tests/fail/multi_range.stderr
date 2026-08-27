@@ -1,0 +1,5 @@
+error: multiple ranges are not allowed
+ --> tests/fail/multi_range.rs:5:21
+  |
+5 | #[auto_tuple(2..=4, 6..=8)]
+  |                     ^

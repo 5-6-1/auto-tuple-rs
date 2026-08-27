@@ -75,9 +75,10 @@ parameter:
 
 | | Shared | All |
 |---|---|---|
-| Trigger | signature references an original generic param | no reference |
+| Trigger | signature references an original generic param, or the trait has no / multiple / non-type generic params | exactly one type generic param, never referenced by selected items |
 | Helper trait | `_TrTuple2<__T0, __T1, T> where __T0: Tr<T>, __T1: Tr<T>` | `_TrTuple2All<__T0, __T1, __TA0, __TA1> where __T0: Tr<__TA0>, __T1: Tr<__TA1>` |
 | Element params | shared `T` | independent `__TA0`/`__TA1` (`A: Tr<i32>, B: Tr<String>` allowed) |
+| Bounds | original params lifted as-is | original type param's bounds carry to `__TA{i}` (`Tr<T: Clone>` → `__TA0: Clone`) |
 | Arity 0/1 names | `_TrTuple0` / `_TrTuple1` | `_TrTuple0All` / `_TrTuple1All` |
 
 Traits without generic parameters always use the plain name and an
@@ -105,13 +106,17 @@ Unsupported (clear `compile_error!`):
 
 - `Self` nested inside a generic container in **parameters** (`Box<Self>`
   params, `Vec<Self>` params)
+- by-value `impl Trait` parameters (a single value cannot be forwarded to
+  multiple elements; use a reference or a `Copy` generic)
 - `impl Trait` parameters mentioning `Self` (a single value cannot satisfy the
   per-element `Item` constraints)
+- custom receivers (`self: Box<Self>` etc.)
 - `+ use<..>` precise capturing in returns (the trait/impl capture lists of
   the per-element opaques are not yet handled)
 - generic associated types (GATs)
 - `Self` inside where-clause bounds in non-subject position
 - auto traits
+- multiple arity ranges in one attribute
 
 Left to the compiler (no pre-emption):
 

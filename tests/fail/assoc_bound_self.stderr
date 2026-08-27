@@ -1,5 +1,0 @@
-error: `Self` in an associated type bound is not supported
- --> tests/fail/assoc_bound_self.rs:7:18
-  |
-7 |     type Output: Into<Self>;
-  |                  ^^^^^^^^^^

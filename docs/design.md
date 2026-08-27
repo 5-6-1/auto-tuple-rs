@@ -24,7 +24,8 @@
 
 - 扫描**被选中项**的签名（方法参数/返回/泛型 bound/方法 where、关联常量类型、关联类型 bound）以及**原 trait 级 where**。
 - 标识符解析：签名中出现的标识符，排除方法自身的泛型参数名后，命中 trait 泛型参数集 → 引用。类型路径（`visit_path`）与 lifetime（`visit_lifetime`，`&'a str` 场景）都要扫描。方法泛型参数与 trait 泛型参数**同名被 Rust 禁止**（E0403），排除逻辑仅为防御。
-- 任一 trait 泛型参数被引用 → **共享轨道**；否则 → **异参轨道（All）**。
+- 任一 trait 泛型参数被引用 → **共享轨道**；否则候选 **异参轨道（All）**。
+- **All 轨道仅限"恰好一个 type 泛型参数"的 trait**：多参数、lifetime、const 泛型参数的 trait 一律降级为共享轨道（保守正确；每元素完整参数组留待后续）。
 - 未选中的项不参与判定。
 
 ### 2.2 共享轨道（签名引用原泛型参数）
@@ -47,7 +48,7 @@ where
     type Output;                     // 仅用户显式选中时生成
 }
 
-impl<T, A: Tr<T>, B: Tr<T>> _TrTuple2<T, A, B> for (A, B) {
+impl<T, A: Tr<T>, B: Tr<T>> _TrTuple2<A, B, T> for (A, B) {
     fn g(x: &T) -> (T, T) { (A::g(x), B::g(x)) }
     fn foo() -> (Box<A>, Box<B>) { (A::foo(), B::foo()) }
     type Output = (A::Output, B::Output);
@@ -87,6 +88,7 @@ impl<TA, A: Tr<TA>, TB, B: Tr<TB>> _TrTuple2All<A, B, TA, TB> for (A, B) {
 
 - 辅助 trait 泛型参数 = **元素参数 + 每元素各自的 Tr 参数（TA/TB，按元素序）**。
 - 元素 bound `A: Tr<TA>, B: Tr<TB>` 允许**异参**（`A: Tr<i32>, B: Tr<String>`）。
+- 原 trait 参数若有 bound（`Tr<T: Clone>`），**转移到每个 `__TA{i}`**（`__TA0: Clone`），保证 `A: Tr<TA>` 的 well-formedness。
 - TA/TB 不出现在方法签名中，方法调用时由 `A0: Tr<?>` 约束反推；唯一则行、多则歧义（与直接调用 `A0::foo()` 行为一致）。歧义时可用 UFCS 显式指定消歧：
 
   ```rust
@@ -146,7 +148,7 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 
 > 只做结构变换（Self → 元素参数、包元组、拆包），**绝不改写任何泛型参数标识符**。
 
-方法泛型参数遮蔽 trait 泛型参数（`fn g<T>(x: T)`）时，标识符落到哪层由 Rust 解析器按遮蔽规则决定，机械重写天然保留正确语义。元素参数必须用独特前缀名（`__T0` 等），避免与任何用户标识符撞名。
+方法泛型参数遮蔽 trait 泛型参数（`fn g<T>(x: T)`）时，标识符落到哪层由 Rust 解析器按遮蔽规则决定，机械重写天然保留正确语义。元素参数（`__T{i}`）、`Tr` 参数（`__TA{i}`）与合成参数（`__arg{i}`）**自动避让**原 trait 泛型参数名与已有参数名（冲突时追加 `_`），不再假设前缀足够独特。
 
 ## 4. 各项生成规则
 
@@ -172,12 +174,13 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 
 - 辅助 trait 声明 `type Output;`（无默认），impl 给定 `type Output = (A::Output, B::Output);`。
 - 方法签名中的 `Self::Output` 展开为元素投影 `(A::Output, B::Output)`（bound 已满足，无需辅助 trait 自带关联类型）。
-- **原 bound 保留**：`type Output: Clone;` → 辅助 trait 保留 bound，impl where 自动附加元素化版本（`A::Output: Clone, B::Output: Clone`；0 元组恒真）。
+- **原 bound 处理**：不含 `Self` 且不含原泛型参数的 bound（`type Output: Clone;`）→ 辅助 trait 保留，impl where 自动附加元素化版本（`A::Output: Clone, B::Output: Clone`；0 元组恒真）。**含 `Self` 或原泛型参数的 bound**（`AsRef<T>`、`Into<Self>`）→ 从辅助 trait 删除（元组值无法满足，元素侧已由 `A: Tr<...>` 保证）。
 - **默认不处理**，仅用户显式指定时生成。
 
 ### 4.4 方法级 / trait 级 where
 
 - `where Self: Foo` → 拆分为 `where A: Foo, B: Foo`（1 元组单个，0 元组删除）。
+- `where Self::Output: Clone` → 元素投影 `A::Output: Clone, B::Output: Clone`。
 - `where Self: Sized` → 元素化后恒真，无害。
 - 复杂嵌套（`where Vec<Self>: Foo`）→ compile_error。
 - 原 trait 级 where 原样复制进辅助 trait 与 impl。
@@ -201,20 +204,23 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 
 ## 7. 命名与可见性
 
-- 共享：`{Trait}Tuple{N}`；异参：`{Trait}Tuple{N}All`。
+- 共享：`_{Trait}Tuple{N}`；异参：`_{Trait}Tuple{N}All`（前导下划线）。
 - 生成在原 trait 所在模块，可见性与原 trait 相同（pub trait → pub 辅助 trait），`#[doc(hidden)]`。
 - 可命名覆盖（同时覆盖两个轨道名）。
 - 跨模块同名 trait 不冲突（模块隔离）；用户手动实现同名辅助 trait → E0119，文档约定 + 可命名规避。
+- 生成名（元素参数 `__T{i}`、`Tr` 参数 `__TA{i}`、合成参数 `__arg{i}`）自动避让原 trait 参数名与已有参数名。
 
 ## 8. 错误处理（compile_error）
 
-- 非法范围 / 非法筛选语法 / 指定的项不存在。
+- 非法范围 / 非法筛选语法 / 指定的项不存在 / 多个 range。
 - 参数方向嵌套容器 Self。
+- 按值 `impl Trait` 参数（无法转发给多个元素）。
 - 参数中 `impl Trait` 含 Self（`fn f(x: impl Iterator<Item = Self>)`——单值无法同时满足各元素的 Item 约束）。
+- 自定义 receiver（`self: Box<Self>` 等）。
 - 返回中 `+ use<..>` precise capturing（trait/impl 两侧的 per-element opaque 捕获列表尚未处理）。
 - where 中复杂 Self 嵌套。
 - auto trait。
-- 空选择集提示。
+- 空选择集提示：`#[auto_tuple()]` 与 `#[auto_tuple]` 均视为默认配置（处理全部方法），无显式空选择集写法。
 
 ## 9. 不支持边界（交给编译器）
 

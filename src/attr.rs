@@ -45,9 +45,14 @@ impl Parse for Config {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut cfg = Self::default();
         let mut items = BTreeSet::new();
+        let mut range_seen = false;
 
         while !input.is_empty() {
             if input.peek(LitInt) {
+                if range_seen {
+                    return Err(input.error("multiple ranges are not allowed"));
+                }
+                range_seen = true;
                 let start = input.parse::<LitInt>()?.base10_parse::<usize>()?;
                 let (inclusive, end) = if input.peek(Token![..=]) {
                     input.parse::<Token![..=]>()?;
@@ -150,5 +155,10 @@ mod tests {
     #[test]
     fn rejects_leading_comma() {
         assert!(syn::parse_str::<Config>(", foo").is_err());
+    }
+
+    #[test]
+    fn rejects_multiple_ranges() {
+        assert!(syn::parse_str::<Config>("2..=4, 6..=8").is_err());
     }
 }

@@ -53,7 +53,15 @@ pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
             return Track::Shared;
         }
     }
-    Track::All
+
+    // The All track only supports a single type generic parameter: its
+    // per-element parameters are plain type params (`Tr<__TA{i}>`). Traits
+    // with multiple params, lifetimes or const params are conservatively
+    // downgraded to the shared track, which lifts the original params as-is.
+    match trait_.generics.params.len() {
+        1 if matches!(trait_.generics.params.first(), Some(GenericParam::Type(_))) => Track::All,
+        _ => Track::Shared,
+    }
 }
 
 /// Whether the given trait item's signature references any original trait
@@ -242,13 +250,15 @@ mod tests {
 
     #[test]
     fn method_local_lifetime_is_not_reference() {
+        // A lifetime param disqualifies the All track, so the trait is
+        // downgraded to shared even though the method never uses `'a`.
         let trait_: ItemTrait = parse_quote! {
             trait Tr<'a> {
                 fn f<'b>(x: &'b str);
             }
         };
         let selected = select_one(&trait_, "f");
-        assert_eq!(decided(&trait_, &selected), Track::All);
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
     }
 
     #[test]
@@ -263,9 +273,44 @@ mod tests {
     }
 
     #[test]
-    fn trait_without_generics_is_all() {
+    fn trait_without_generics_is_shared_shape() {
+        // No generic params: the All track is unavailable, so the decision is
+        // shared; the generated shape is identical (plain name, no `__TA`).
         let trait_: ItemTrait = parse_quote! {
             trait Tr {
+                fn foo(&self);
+            }
+        };
+        let selected = select_one(&trait_, "foo");
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn multi_type_params_downgrade_to_shared() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<X, Y> {
+                fn foo(&self);
+            }
+        };
+        let selected = select_one(&trait_, "foo");
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn const_param_downgrades_to_shared() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<const N: usize> {
+                fn foo(&self);
+            }
+        };
+        let selected = select_one(&trait_, "foo");
+        assert_eq!(decided(&trait_, &selected), Track::Shared);
+    }
+
+    #[test]
+    fn single_type_param_stays_all() {
+        let trait_: ItemTrait = parse_quote! {
+            trait Tr<T> {
                 fn foo(&self);
             }
         };

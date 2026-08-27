@@ -1,4 +1,4 @@
-error: `Self` nested inside a generic type is not supported in parameters
+error: by-value `impl Trait` parameters cannot be forwarded to multiple elements; use a reference or a named generic with `Copy`
  --> tests/fail/impl_trait_self_param.rs:8:20
   |
 8 |     fn f(&self, x: impl Iterator<Item = Self>);

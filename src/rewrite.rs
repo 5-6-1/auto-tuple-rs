@@ -47,6 +47,11 @@ pub enum ParamShape {
 /// Classifies a parameter type by its top-level `Self` shape.
 pub fn param_shape(ty: &Type) -> Result<ParamShape> {
     match ty {
+        Type::ImplTrait(_) => Err(syn::Error::new_spanned(
+            ty,
+            "by-value `impl Trait` parameters cannot be forwarded to multiple elements; \
+             use a reference or a named generic with `Copy`",
+        )),
         Type::Path(tp) if tp.qself.is_none() && tp.path.is_ident("Self") => Ok(ParamShape::SelfRef),
         Type::Path(tp) if is_self_assoc(tp) => Ok(ParamShape::Assoc),
         Type::Reference(r) => {
@@ -119,11 +124,16 @@ pub(crate) fn is_self_type(ty: &Type) -> bool {
 
 /// True for `Self::Assoc...` paths in both forms: `<Self as Tr>::Assoc` and
 /// plain `Self::Assoc` (which syn parses as a plain multi-segment path).
-fn is_self_assoc(tp: &syn::TypePath) -> bool {
+pub(crate) fn is_self_assoc(tp: &syn::TypePath) -> bool {
     match &tp.qself {
         Some(q) => is_self_type(q.ty.as_ref()),
         None => path_starts_with_self(&tp.path),
     }
+}
+
+/// The assoc-name of a `Self::Assoc...` path, e.g. `Output` in `Self::Output`.
+pub(crate) fn self_assoc_name(tp: &syn::TypePath) -> Option<Ident> {
+    tp.path.segments.last().map(|s| s.ident.clone())
 }
 
 fn path_starts_with_self(path: &syn::Path) -> bool {

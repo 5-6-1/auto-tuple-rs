@@ -1,0 +1,5 @@
+error: custom receivers (`self: Type`) are not supported
+ --> tests/fail/custom_receiver.rs:7:10
+  |
+7 |     fn f(self: Box<Self>);
+  |          ^^^^^^^^^^^^^^^

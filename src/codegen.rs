@@ -14,6 +14,59 @@ use syn::{
 use crate::analyze::Track;
 use crate::rewrite::{self, tupleize};
 
+/// Names of the trait's generic parameters (for bound-dropping decisions).
+fn trait_param_names(generics: &syn::Generics) -> std::collections::BTreeSet<String> {
+    generics
+        .params
+        .iter()
+        .map(|p| match p {
+            GenericParam::Type(t) => t.ident.to_string(),
+            GenericParam::Lifetime(l) => l.lifetime.ident.to_string(),
+            GenericParam::Const(c) => c.ident.to_string(),
+        })
+        .collect()
+}
+
+/// Whether a bound mentions `Self` or an original trait generic parameter.
+///
+/// Such bounds cannot be kept on the helper trait: its associated value is the
+/// element tuple, which does not satisfy them. The element side is already
+/// guaranteed by `A: Tr<...>`.
+fn bound_mentions_self_or_params(
+    bound: &syn::TypeParamBound, trait_params: &std::collections::BTreeSet<String>,
+) -> bool {
+    use syn::visit::Visit;
+    struct Find<'a> {
+        params: &'a std::collections::BTreeSet<String>,
+        hit: bool,
+    }
+    impl<'ast> Visit<'ast> for Find<'_> {
+        fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+            let self_hit = match &node.qself {
+                Some(q) => rewrite::is_self_type(q.ty.as_ref()),
+                None => {
+                    node.path.is_ident("Self")
+                        || node.path.segments.first().is_some_and(|s| s.ident == "Self")
+                }
+            };
+            if self_hit {
+                self.hit = true;
+            }
+            syn::visit::visit_type_path(self, node);
+        }
+        fn visit_path(&mut self, node: &'ast syn::Path) {
+            if node.segments.first().is_some_and(|seg| self.params.contains(&seg.ident.to_string()))
+            {
+                self.hit = true;
+            }
+            syn::visit::visit_path(self, node);
+        }
+    }
+    let mut finder = Find { params: trait_params, hit: false };
+    finder.visit_type_param_bound(bound);
+    finder.hit
+}
+
 /// Whether a type contains a `use<..>` precise-capturing bound.
 fn contains_precise_capture(ty: &Type) -> bool {
     use syn::visit::Visit;
@@ -47,14 +100,35 @@ pub fn generate(
     Ok(quote!(#helper #impl_))
 }
 
-/// Element type parameters `__T0..__T{N-1}`.
-fn elem_params(n: usize) -> Vec<Ident> {
-    (0..n).map(|i| format_ident!("__T{i}")).collect()
+/// Element type parameters `__T0..__T{N-1}`, avoiding clashes with the
+/// trait's own generic parameter names.
+fn elem_params(n: usize, taken: &std::collections::BTreeSet<String>) -> Vec<Ident> {
+    (0..n).map(|i| fresh_param_name(format!("__T{i}"), taken)).collect()
 }
 
 /// Per-element `Tr` parameters `__TA0..__TA{N-1}` (All track only).
-fn tr_params(n: usize) -> Vec<Ident> {
-    (0..n).map(|i| format_ident!("__TA{i}")).collect()
+fn tr_params(n: usize, taken: &std::collections::BTreeSet<String>) -> Vec<Ident> {
+    (0..n).map(|i| fresh_param_name(format!("__TA{i}"), taken)).collect()
+}
+
+fn fresh_param_name(base: String, taken: &std::collections::BTreeSet<String>) -> Ident {
+    let mut name = base;
+    while taken.contains(&name) {
+        name.push('_');
+    }
+    format_ident!("{}", name)
+}
+
+/// Synthetic name for an unnamed (`_`) parameter that collides with nothing.
+///
+/// Derived from the *original* parameter names only, so the helper-side
+/// signature and the impl-side body agree on the same name.
+fn synthetic_arg_name(taken: &std::collections::BTreeSet<String>, pidx: usize) -> Ident {
+    let mut name = format_ident!("__arg{pidx}");
+    while taken.contains(&name.to_string()) {
+        name = format_ident!("{}_", name);
+    }
+    name
 }
 
 /// Helper trait name: `_TrTuple2` / `_TrTuple2All`.
@@ -114,6 +188,28 @@ fn rewrite_where_clause(
                     out.push(parse_quote!(#e: #bounds));
                 }
             }
+            WherePredicate::Type(pt) if matches!(&pt.bounded_ty, Type::Path(tp) if rewrite::is_self_assoc(tp)) =>
+            {
+                // `where Self::Output: Clone` -> per-element projections
+                // `A::Output: Clone, B::Output: Clone`.
+                let Type::Path(tp) = &pt.bounded_ty else {
+                    return Err(syn::Error::new_spanned(
+                        p,
+                        "unsupported `Self::Assoc` where clause subject",
+                    ));
+                };
+                let Some(assoc) = rewrite::self_assoc_name(tp) else {
+                    return Err(syn::Error::new_spanned(
+                        p,
+                        "unsupported `Self::Assoc` where clause subject",
+                    ));
+                };
+                for e in elems {
+                    let bounds = &pt.bounds;
+                    out.push(parse_quote!(#e::#assoc: #bounds));
+                }
+                continue;
+            }
             WherePredicate::Type(pt) => {
                 if rewrite::type_contains_self(&pt.bounded_ty)
                     || rewrite::bounds_contain_self(&pt.bounds)
@@ -135,8 +231,9 @@ fn build_helper_trait(
     trait_: &ItemTrait, track: Track, sel: &Selected, n: usize,
 ) -> Result<ItemTrait> {
     let has_orig_params = !trait_.generics.params.is_empty();
-    let elems = elem_params(n);
-    let tr_params_ = tr_params(n);
+    let taken = trait_param_names(&trait_.generics);
+    let elems = elem_params(n, &taken);
+    let tr_params_ = tr_params(n, &taken);
     let name = helper_name(trait_, n, track, has_orig_params);
     let tr = &trait_.ident;
 
@@ -144,7 +241,21 @@ fn build_helper_trait(
     let mut params: Vec<GenericParam> = elems.iter().map(|e| parse_quote!(#e)).collect();
     match track {
         Track::Shared => params.extend(generics.params.iter().cloned()),
-        Track::All if has_orig_params => params.extend(tr_params_.iter().map(|p| parse_quote!(#p))),
+        Track::All if has_orig_params => {
+            // The single original type param's bounds carry over to each
+            // element's `Tr` param (`Tr<T: Clone>` needs `__TA{i}: Clone`).
+            let orig_bounds = match trait_.generics.params.first() {
+                Some(GenericParam::Type(t)) => t.bounds.clone(),
+                _ => unreachable!("All track implies a single type param"),
+            };
+            for p in &tr_params_ {
+                let mut ta: GenericParam = parse_quote!(#p);
+                if let GenericParam::Type(tp) = &mut ta {
+                    tp.bounds = orig_bounds.clone();
+                }
+                params.push(ta);
+            }
+        }
         Track::All => {}
     }
     generics.params = params.into_iter().collect();
@@ -182,8 +293,9 @@ fn build_helper_trait(
     for c in &sel.consts {
         items.push(TraitItem::Const(gen_helper_const(c, n, &elems)?));
     }
+    let trait_params = trait_param_names(&trait_.generics);
     for t in &sel.types {
-        items.push(TraitItem::Type(gen_helper_type(t)?));
+        items.push(TraitItem::Type(gen_helper_type(t, &trait_params)?));
     }
 
     Ok(ItemTrait {
@@ -203,8 +315,9 @@ fn build_helper_trait(
 
 fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Result<ItemImpl> {
     let has_orig_params = !trait_.generics.params.is_empty();
-    let elems = elem_params(n);
-    let tr_params_ = tr_params(n);
+    let taken = trait_param_names(&trait_.generics);
+    let elems = elem_params(n, &taken);
+    let tr_params_ = tr_params(n, &taken);
     let name = helper_name(trait_, n, track, has_orig_params);
     let tr = &trait_.ident;
 
@@ -221,9 +334,18 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
                 v
             }
             Track::All => {
+                // Element `Tr` params carry the original type param's bounds.
+                let orig_bounds = match trait_.generics.params.first() {
+                    Some(GenericParam::Type(t)) => t.bounds.clone(),
+                    _ => unreachable!("All track implies a single type param"),
+                };
                 let mut v = Vec::new();
                 for (e, p) in elems.iter().zip(&tr_params_) {
-                    v.push(parse_quote!(#p));
+                    let mut ta: GenericParam = parse_quote!(#p);
+                    if let GenericParam::Type(tp) = &mut ta {
+                        tp.bounds = orig_bounds.clone();
+                    }
+                    v.push(ta);
                     v.push(parse_quote!(#e: #tr<#p>));
                 }
                 v
@@ -242,8 +364,9 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
     let mut predicates = rewrite_where_clause(&trait_.generics.where_clause, n, &elems)?
         .map(|wc| wc.predicates.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();
+    let trait_params = trait_param_names(&trait_.generics);
     for t in &sel.types {
-        predicates.extend(elem_typed_bounds(t, &elems)?);
+        predicates.extend(elem_typed_bounds(t, &elems, &trait_params)?);
     }
 
     let mut generics = if impl_params.is_empty() {
@@ -290,6 +413,12 @@ fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Res
 
 /// Rewrites a method signature for the helper side (return, params, where).
 fn rewrite_signature(sig: &mut Signature, n: usize, elems: &[Ident]) -> Result<()> {
+    if let Some(r) = sig.receiver().filter(|r| matches!(r.kind, syn::ReceiverKind::Typed(..))) {
+        return Err(syn::Error::new_spanned(
+            r,
+            "custom receivers (`self: Type`) are not supported",
+        ));
+    }
     let ret = match &sig.output {
         ReturnType::Default => parse_quote!(()),
         ReturnType::Type(_, ty) => (**ty).clone(),
@@ -302,14 +431,26 @@ fn rewrite_signature(sig: &mut Signature, n: usize, elems: &[Ident]) -> Result<(
     }
     sig.output = ReturnType::Type(parse_quote!(->), Box::new(tupleize(&ret, n, elems)));
 
+    let orig_arg_names: std::collections::BTreeSet<String> = sig
+        .inputs
+        .iter()
+        .filter_map(|a| match a {
+            FnArg::Typed(pt) => match &*pt.pat {
+                Pat::Ident(pi) => Some(pi.ident.to_string()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
     for (idx, arg) in sig.inputs.iter_mut().enumerate() {
         if let FnArg::Typed(pt) = arg {
             *pt.ty = rewrite::rewrite_param(&pt.ty, n, elems)?;
             match &*pt.pat {
                 Pat::Ident(_) => {}
                 Pat::Wild(_) => {
-                    // `_: T` has no name to forward; give it a synthetic one.
-                    let name = format_ident!("__arg{idx}");
+                    // `_: T` has no name to forward; give it a synthetic one
+                    // that collides with no existing parameter name.
+                    let name = synthetic_arg_name(&orig_arg_names, idx);
                     *pt.pat = parse_quote!(#name);
                 }
                 _ => {
@@ -353,6 +494,17 @@ fn build_body(sig: &Signature, n: usize, elems: &[Ident]) -> Result<Block> {
         return Ok(parse_quote!({}));
     }
     let name = &sig.ident;
+    let orig_arg_names: std::collections::BTreeSet<String> = sig
+        .inputs
+        .iter()
+        .filter_map(|a| match a {
+            FnArg::Typed(pt) => match &*pt.pat {
+                Pat::Ident(pi) => Some(pi.ident.to_string()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
     let calls = (0..n)
         .map(|i| {
             let elem = &elems[i];
@@ -362,7 +514,7 @@ fn build_body(sig: &Signature, n: usize, elems: &[Ident]) -> Result<Block> {
                     Pat::Ident(pi) => Some(rewrite::unpack_arg(&pt.ty, &pi.ident, i)),
                     // `_: T` gets the same synthetic name as in rewrite_signature.
                     Pat::Wild(_) => {
-                        let name = format_ident!("__arg{pidx}");
+                        let name = synthetic_arg_name(&orig_arg_names, pidx);
                         Some(rewrite::unpack_arg(&pt.ty, &name, i))
                     }
                     _ => None,
@@ -413,20 +565,25 @@ fn gen_impl_const(item: &TraitItemConst, n: usize, elems: &[Ident]) -> Result<Im
     Ok(item)
 }
 
-fn gen_helper_type(item: &TraitItemType) -> Result<TraitItemType> {
+fn gen_helper_type(
+    item: &TraitItemType, trait_params: &std::collections::BTreeSet<String>,
+) -> Result<TraitItemType> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
             "generic associated types are not supported",
         ));
     }
-    if rewrite::bounds_contain_self(&item.bounds) {
-        return Err(syn::Error::new_spanned(
-            &item.bounds,
-            "`Self` in an associated type bound is not supported",
-        ));
-    }
     let mut t = item.clone();
+    // Drop bounds mentioning `Self` or an original trait generic param: the
+    // helper trait's associated value is the element tuple, which cannot
+    // satisfy them; the element side is guaranteed by `A: Tr<...>`.
+    t.bounds = item
+        .bounds
+        .iter()
+        .filter(|b| !bound_mentions_self_or_params(b, trait_params))
+        .cloned()
+        .collect();
     t.default = None;
     Ok(t)
 }
@@ -442,10 +599,18 @@ fn gen_impl_type(item: &TraitItemType, n: usize, elems: &[Ident]) -> Result<Impl
 }
 
 /// Element-wise copies of an associated type's bounds, e.g. `A::Output: Clone`.
-fn elem_typed_bounds(item: &TraitItemType, elems: &[Ident]) -> Result<Vec<WherePredicate>> {
+///
+/// Bounds mentioning `Self` or an original trait generic param are skipped:
+/// they are guaranteed by `A: Tr<...>` on the element side.
+fn elem_typed_bounds(
+    item: &TraitItemType, elems: &[Ident], trait_params: &std::collections::BTreeSet<String>,
+) -> Result<Vec<WherePredicate>> {
     let name = &item.ident;
     let mut out = Vec::new();
     for b in &item.bounds {
+        if bound_mentions_self_or_params(b, trait_params) {
+            continue;
+        }
         let bound = match b {
             syn::TypeParamBound::Trait(tb) => tb.to_token_stream(),
             syn::TypeParamBound::Lifetime(l) => l.to_token_stream(),

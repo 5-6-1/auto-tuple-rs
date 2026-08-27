@@ -1,0 +1,5 @@
+error: by-value `impl Trait` parameters cannot be forwarded to multiple elements; use a reference or a named generic with `Copy`
+ --> tests/fail/impl_trait_param.rs:7:20
+  |
+7 |     fn f(&self, x: impl Clone);
+  |                    ^^^^^^^^^^
