@@ -158,6 +158,7 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 - `&mut T` 参数：reborrow 转发 `(self.0.g(&mut *x), self.1.g(&mut *x))`。
 - 默认方法（带 body）：辅助 trait 中**无 body**，body 由生成的 impl 给出；原默认实现经 `self.0.foo()` 自然继承。
 - `async fn`：顺序 await，`(self.0.foo(x).await, self.1.foo(x).await)`。
+- `impl Trait`（RPIT）返回：逐元素展开为每个元素一个 opaque，`-> impl Iterator<Item = Self>` → `(impl Iterator<Item = A>, impl Iterator<Item = B>)`；impl 的隐藏类型是元素各自 `Tr::foo` 的 opaque（已验证可行）。
 - `unsafe fn`：辅助 trait 保留 `unsafe`，生成的 impl body 显式 `unsafe {}` 块（edition 2024 无隐式 unsafe body）。
 - `unsafe trait`：辅助 trait 标 `unsafe`，impl 为 `unsafe impl`。
 
@@ -209,9 +210,9 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 
 - 非法范围 / 非法筛选语法 / 指定的项不存在。
 - 参数方向嵌套容器 Self。
+- 参数中 `impl Trait` 含 Self（`fn f(x: impl Iterator<Item = Self>)`——单值无法同时满足各元素的 Item 约束）。
 - where 中复杂 Self 嵌套。
 - auto trait。
-- RPIT 返回（`impl Trait`）——v1 不支持（opaque 归属语义复杂），compile_error。
 - 空选择集提示。
 
 ## 9. 不支持边界（交给编译器）
@@ -222,13 +223,14 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 
 ## 10. 测试策略
 
-- trybuild 编译测试矩阵：简单/泛型 trait、`&self`/`&mut self`/`self`、关联函数、泛型方法、async、关联常量/类型、筛选、双轨道、0/1 元组、遮蔽场景、默认值、命名冲突。
+- trybuild 编译测试矩阵：简单/泛型 trait、`&self`/`&mut self`/`self`、关联函数、泛型方法、async、RPIT、关联常量/类型、筛选、双轨道、0/1 元组、默认值、命名冲突。
 - 运行期断言验证逐元素语义（`(A::foo(), B::foo())` 等价性）。
 - 属性解析单元测试（范围、筛选、非法输入）。
 
-## 11. 待验证项（实现时优先）
+## 11. 待验证项
 
-1. 方法调用 `(a, b).foo()` 与关联函数 `(A, B)::foo()` 的泛型参数推断（共享轨道 T 由签名提供 / All 轨道 TA/TB 反推）——trybuild 实测。
-2. `&Self` 返回 elision 元组化（`(&A, &B)`）。
-3. edition 2024 unsafe body 处理。
-4. 泛型 async fn 在目标工具链的行为。
+1. ~~方法调用 `(a, b).foo()` 与关联函数 `(A, B)::foo()` 的泛型参数推断~~ — 已验证通过（共享轨道 T 由签名提供 / All 轨道 TA/TB 反推，trybuild 实测）。
+2. ~~`&Self` 返回 elision 元组化~~ — 已验证（`fn name(&self) -> &str` → `(&str, &str)`）。
+3. ~~edition 2024 unsafe body 处理~~ — 已验证（unsafe fn body 显式 `unsafe {}`）。
+4. ~~泛型 async fn 在目标工具链的行为~~ — 已验证：原生 `async fn`（含参数）逐元素顺序 await 正常；泛型 async 方法由编译器裁决。
+5. ~~RPIT 返回（`impl Trait`）~~ — 已验证支持：逐元素展开为每元素一个 opaque，隐藏类型为元素各自的 opaque。

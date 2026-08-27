@@ -91,6 +91,9 @@ Supported:
 - generic methods, `where` clauses, lifetimes (including elided lifetime
   returns such as `fn name(&self) -> &str`)
 - `async fn` (sequential await) and `unsafe fn` / `unsafe trait`
+- `impl Trait` (RPIT) returns: each element keeps its own opaque type
+  (`fn f() -> impl Iterator<Item = Self>` becomes a tuple of per-element
+  opaques)
 - `Self` anywhere in return types, recursively (`&Self`, `Box<Self>`,
   `Vec<Self>`, `Self::Output`, ...)
 - `Self`, `&Self`, `&mut Self`, `Self::Assoc` in **parameters** (unpacked per
@@ -101,6 +104,8 @@ Unsupported (clear `compile_error!`):
 
 - `Self` nested inside a generic container in **parameters** (`Box<Self>`
   params, `Vec<Self>` params)
+- `impl Trait` parameters mentioning `Self` (a single value cannot satisfy the
+  per-element `Item` constraints)
 - generic associated types (GATs)
 - `Self` inside where-clause bounds in non-subject position
 - auto traits
