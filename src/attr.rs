@@ -61,7 +61,9 @@ impl Parse for Config {
                     input.parse::<Token![..]>()?;
                     (false, input.parse::<LitInt>()?.base10_parse::<usize>()?)
                 } else {
-                    return Err(input.error("expected `..` or `..=` after the range start"));
+                    return Err(
+                        input.error("expected `..` or `..=` after the range start, e.g. `2..=12`")
+                    );
                 };
                 let end = if inclusive {
                     end

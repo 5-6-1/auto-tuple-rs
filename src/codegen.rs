@@ -166,7 +166,15 @@ fn all_track_params(
                     let name = fresh_param_name(format!("__T{i}_{}", t.ident), taken);
                     let mut tp: GenericParam = parse_quote!(#name);
                     if let GenericParam::Type(tp) = &mut tp {
-                        tp.bounds = t.bounds.clone();
+                        // Carry only whitelisted bounds (the element tuple
+                        // provably satisfies them); anything mentioning `Self`
+                        // or an original param was already routed to Shared.
+                        tp.bounds = t
+                            .bounds
+                            .iter()
+                            .filter(|b| keep_elem_bound(b, taken))
+                            .cloned()
+                            .collect();
                     }
                     params.push(tp);
                     names.push(quote!(#name));
@@ -196,12 +204,20 @@ fn all_track_params(
     (params, per_elem)
 }
 
+/// A generated parameter name that collides with nothing in `taken`; a
+/// numeric suffix keeps the search bounded (unlike appending underscores).
 fn fresh_param_name(base: String, taken: &std::collections::BTreeSet<String>) -> Ident {
-    let mut name = base;
-    while taken.contains(&name) {
-        name.push('_');
+    if !taken.contains(&base) {
+        return format_ident!("{}", base);
     }
-    format_ident!("{}", name)
+    let mut i = 1;
+    loop {
+        let name = format!("{base}_{i}");
+        if !taken.contains(&name) {
+            return format_ident!("{}", name);
+        }
+        i += 1;
+    }
 }
 
 /// Synthetic name for an unnamed (`_`) parameter that collides with nothing.
@@ -283,6 +299,9 @@ fn rewrite_where_clause(wc: &Option<WhereClause>, elems: &[Ident]) -> Result<Opt
                     let bounds = &pt.bounds;
                     out.push(parse_quote!(#subject: #bounds));
                 }
+                // The projection subject still mentions `Self`, so it must not
+                // fall through to the generic `Self`-rejecting arm below; this
+                // `continue` is required, not dead code.
                 continue;
             }
             WherePredicate::Type(pt) => {

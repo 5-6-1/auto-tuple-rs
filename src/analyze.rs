@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use syn::visit::Visit;
-use syn::{GenericParam, ItemTrait, TraitItem};
+use syn::{GenericParam, ItemTrait, TraitItemConst, TraitItemFn, TraitItemType};
 
 /// Helper-trait shape to generate for a trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +22,13 @@ pub enum Track {
 }
 
 /// Decides the track for a trait given the selected items.
-pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
+///
+/// Takes the `Selected` slices directly (no `TraitItem` boxing), so the caller
+/// avoids cloning the selected items.
+pub fn decide_track(
+    trait_: &ItemTrait, methods: &[&TraitItemFn], consts: &[&TraitItemConst],
+    types: &[&TraitItemType],
+) -> Track {
     let trait_params = generic_param_names(&trait_.generics);
 
     // The original trait-level constraints must remain expressible in the
@@ -59,8 +65,18 @@ pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
         return Track::Shared;
     }
 
-    for item in selected {
-        if item_references_generics(item, &trait_params) {
+    for f in methods {
+        if fn_references_generics(f, &trait_params) {
+            return Track::Shared;
+        }
+    }
+    for c in consts {
+        if const_references_generics(c, &trait_params) {
+            return Track::Shared;
+        }
+    }
+    for t in types {
+        if type_references_generics(t, &trait_params) {
             return Track::Shared;
         }
     }
@@ -71,30 +87,27 @@ pub fn decide_track(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
     Track::All
 }
 
-/// Whether the given trait item's signature references any original trait
-/// generic parameter, excluding method-local shadowing parameters.
-fn item_references_generics(item: &TraitItem, trait_params: &BTreeSet<String>) -> bool {
-    match item {
-        TraitItem::Fn(f) => {
-            let method_params = generic_param_names(&f.sig.generics);
-            let mut scanner = Scanner { trait_params, method_params: &method_params, hit: false };
-            scanner.visit_signature(&f.sig);
-            scanner.hit
-        }
-        TraitItem::Const(c) => {
-            let mut scanner = Scanner { trait_params, method_params: &BTreeSet::new(), hit: false };
-            scanner.visit_type(&c.ty);
-            scanner.hit
-        }
-        TraitItem::Type(t) => {
-            let mut scanner = Scanner { trait_params, method_params: &BTreeSet::new(), hit: false };
-            for bound in &t.bounds {
-                scanner.visit_type_param_bound(bound);
-            }
-            scanner.hit
-        }
-        _ => false,
+/// Whether a method signature references any original trait generic
+/// parameter, excluding method-local generic parameters.
+fn fn_references_generics(f: &TraitItemFn, trait_params: &BTreeSet<String>) -> bool {
+    let method_params = generic_param_names(&f.sig.generics);
+    let mut scanner = Scanner { trait_params, method_params: &method_params, hit: false };
+    scanner.visit_signature(&f.sig);
+    scanner.hit
+}
+
+fn const_references_generics(c: &TraitItemConst, trait_params: &BTreeSet<String>) -> bool {
+    let mut scanner = Scanner { trait_params, method_params: &BTreeSet::new(), hit: false };
+    scanner.visit_type(&c.ty);
+    scanner.hit
+}
+
+fn type_references_generics(t: &TraitItemType, trait_params: &BTreeSet<String>) -> bool {
+    let mut scanner = Scanner { trait_params, method_params: &BTreeSet::new(), hit: false };
+    for bound in &t.bounds {
+        scanner.visit_type_param_bound(bound);
     }
+    scanner.hit
 }
 
 fn generic_param_names(generics: &syn::Generics) -> BTreeSet<String> {
@@ -140,6 +153,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use syn::TraitItem;
     use syn::parse_quote;
 
     fn select_one<'a>(trait_: &'a ItemTrait, name: &str) -> Vec<&'a TraitItem> {
@@ -157,7 +171,28 @@ mod tests {
     }
 
     fn decided(trait_: &ItemTrait, selected: &[&TraitItem]) -> Track {
-        decide_track(trait_, selected)
+        let methods = selected
+            .iter()
+            .filter_map(|i| match i {
+                TraitItem::Fn(f) => Some(f),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let consts = selected
+            .iter()
+            .filter_map(|i| match i {
+                TraitItem::Const(c) => Some(c),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let types = selected
+            .iter()
+            .filter_map(|i| match i {
+                TraitItem::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        decide_track(trait_, &methods, &consts, &types)
     }
 
     #[test]

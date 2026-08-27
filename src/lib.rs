@@ -64,14 +64,8 @@ fn expand(
     }
 
     let selected = select(&trait_, &cfg)?;
-    let selected_refs: Vec<TraitItem> = selected
-        .methods
-        .iter()
-        .map(|m| TraitItem::Fn((*m).clone()))
-        .chain(selected.consts.iter().map(|c| TraitItem::Const((*c).clone())))
-        .chain(selected.types.iter().map(|t| TraitItem::Type((*t).clone())))
-        .collect();
-    let track = analyze::decide_track(&trait_, &selected_refs.iter().collect::<Vec<_>>());
+    let track =
+        analyze::decide_track(&trait_, &selected.methods, &selected.consts, &selected.types);
 
     let mut generated = Vec::new();
     for n in cfg.sizes.clone() {
