@@ -140,28 +140,65 @@ mod proptests {
         ]
     }
 
+    /// Trait generic-parameter shapes (all syntactically valid).
+    fn trait_generics_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just(String::new()),
+            Just("<T>".to_string()),
+            Just("<T, U>".to_string()),
+            Just("<'a>".to_string()),
+            Just("<const N: usize>".to_string()),
+            Just("<T: Clone>".to_string()),
+            Just("<T = u32>".to_string()),
+        ]
+    }
+
+    /// Method shapes covering receivers, args, generics, async, unsafe,
+    /// `Self`-typed params/returns, RPIT and `where` clauses.
+    fn method_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "fn foo(&self) -> usize;",
+            "fn foo(&mut self, x: usize) -> usize;",
+            "fn foo(self);",
+            "fn foo();",
+            "fn foo<X>(x: X) -> X;",
+            "fn foo<T: Clone>(&self, x: T) -> T;",
+            "fn foo(&self, x: &Self);",
+            "fn foo(&mut self, x: &mut Self);",
+            "fn foo(&self) -> Box<Self>;",
+            "fn foo(&self) -> Vec<Self> where Self: Sized;",
+            "async fn foo(&self) -> usize;",
+            "unsafe fn foo(&self) -> usize;",
+            "fn foo(&self) -> impl Iterator<Item = Self>;",
+            "fn foo(&self, x: Self::Output) -> Self::Output;",
+            "fn foo(&self) -> usize where Self: Sized;",
+        ]
+    }
+
+    /// Associated const/type items (syntactically valid).
+    fn extra_item_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "const MAX: usize;",
+            "type Out;",
+            "type Out: Clone;",
+            "type Out = usize;",
+        ]
+    }
+
     proptest! {
         /// Any syntactically valid trait — including names that collide with
-        /// the macro's generated identifiers — must expand without panicking
-        /// (errors as `compile_error!` are fine).
+        /// the macro's generated identifiers and every supported signature
+        /// shape — must expand without panicking (errors as `compile_error!`
+        /// are fine; the point is "never a macro panic").
         #[test]
         fn arbitrary_trait_never_panics(
             trait_name in ident_strategy(),
-            method_names in prop::collection::vec(ident_strategy(), 1..5),
-            generic_names in prop::collection::vec(ident_strategy(), 0..3),
+            trait_generics in trait_generics_strategy(),
+            methods in prop::collection::vec(method_strategy(), 0..6),
+            extra_items in prop::collection::vec(extra_item_strategy(), 0..3),
         ) {
-            let generics = generic_names.join(", ");
-            let methods = method_names
-                .iter()
-                .map(|m| {
-                    if generics.is_empty() {
-                        format!("fn {m}(&self) -> usize;")
-                    } else {
-                        format!("fn {m}<{generics}>(x: {generic_names_0}) -> usize;", generic_names_0 = generic_names[0])
-                    }
-                })
-                .collect::<String>();
-            let src = format!("trait {trait_name} {{ {methods} }}");
+            let body = [methods.join(" "), extra_items.join(" ")].join(" ");
+            let src = format!("trait {trait_name}{trait_generics} {{ {body} }}");
             let tokens: TokenStream = src.parse().unwrap();
             let _ = expand(TokenStream::new(), tokens);
         }

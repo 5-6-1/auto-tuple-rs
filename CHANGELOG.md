@@ -2,7 +2,7 @@
 
 > User-visible feature and behavior changes. English, one entry per release.
 
-## Unreleased
+## 0.1.2 (2026-08-27)
 
 - **Generated helper-trait params now avoid method-local generic params**
   (`fn f<__T0>` no longer collides with the element param `__T0` -> E0403).
@@ -12,6 +12,11 @@
 - **Associated-type bounds are whitelisted by single-segment name only**:
   a same-named local trait (`my::Clone`) is no longer kept on the helper
   trait.
+- CI: MSRV (1.98) / Windows / `cargo doc` jobs; proptest property test
+  ("any input never panics"); regression tests for empty traits and
+  `pub(crate)` + `name` combos.
+- Internal-name policy documented (§7.1: names are a stable API once
+  published).
 
 ## 0.1.1 (2026-08-27)
 
