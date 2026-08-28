@@ -21,6 +21,7 @@ syn = { version = "3", features = ["full", "visit", "visit-mut", "parsing", "pri
 
 [dev-dependencies]
 trybuild = "1"
+proptest = "1"
 
 [lints.rust]
 # The 1.97+ `linker_messages` lint is deliberately outside the `warnings`

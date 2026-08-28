@@ -71,6 +71,10 @@ There is no other semantics: no arithmetic merging, no short-circuiting.
 ```
 
 - Ranges follow Rust range semantics (`2..12` excludes 12, `2..=12` includes it).
+- **Compile cost**: each arity generates one helper trait + blanket impl, so
+  the default `2..=12` emits 11 pairs per annotated trait. For heavy trait
+  graphs prefer a tighter range (`#[auto_tuple(2..=4)]`) to keep build times
+  down.
 - Without an explicit item list all **methods** are processed; associated
   consts and types are processed only when explicitly named.
 - A visibility override (`pub`, `pub(crate)`, ...) applies to the generated

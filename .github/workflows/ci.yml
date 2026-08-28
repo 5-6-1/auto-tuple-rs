@@ -5,19 +5,66 @@ on:
     branches: [master]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  quality-gate:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test-stable:
+    name: test (stable, full)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  test-msrv:
+    name: test (MSRV 1.98)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          components: clippy, rustfmt
-      - name: Check
-        run: cargo check --all-targets
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Format
-        run: cargo fmt --check
-      - name: Test
-        run: cargo test
+      - uses: Swatinem/rust-cache@v2
+      # Skip trybuild snapshots (.stderr wording drifts with rustc); run
+      # unit + doctests only.
+      - run: cargo test --lib
+      - run: cargo test --doc
+
+  test-windows:
+    name: test (Windows MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  doc:
+    name: doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps

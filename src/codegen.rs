@@ -27,6 +27,24 @@ fn trait_param_names(generics: &syn::Generics) -> std::collections::BTreeSet<Str
         .collect()
 }
 
+/// Names to avoid when generating helper-trait params: the trait's own
+/// generic params plus every selected method's local generic params. A
+/// generated param colliding with either triggers E0403 in user code.
+fn taken_names(trait_: &ItemTrait, sel: &Selected) -> std::collections::BTreeSet<String> {
+    let mut taken = trait_param_names(&trait_.generics);
+    for m in &sel.methods {
+        for p in &m.sig.generics.params {
+            let name = match p {
+                GenericParam::Type(t) => t.ident.to_string(),
+                GenericParam::Lifetime(l) => l.lifetime.ident.to_string(),
+                GenericParam::Const(c) => c.ident.to_string(),
+            };
+            taken.insert(name);
+        }
+    }
+    taken
+}
+
 /// Whether a bound should be kept (element-wise) on the helper trait.
 ///
 /// The helper trait's associated value is the element tuple, so a bound is
@@ -45,9 +63,13 @@ fn keep_elem_bound(
     match bound {
         syn::TypeParamBound::Lifetime(_) => true,
         syn::TypeParamBound::Trait(tb) => {
-            let Some(seg) = tb.path.segments.last() else {
+            // Single-segment paths only: a same-named local trait
+            // (`my::Clone`) would be kept by a bare-name match but the tuple
+            // almost certainly does not implement it.
+            if tb.path.segments.len() != 1 {
                 return false;
-            };
+            }
+            let seg = &tb.path.segments[0];
             let whitelisted = matches!(
                 seg.ident.to_string().as_str(),
                 "Clone"
@@ -134,9 +156,10 @@ pub struct Selected<'a> {
 /// Generates the helper trait and blanket impl for one arity.
 pub fn generate(
     trait_: &ItemTrait, track: Track, selected: &Selected, n: usize, vis: &syn::Visibility,
+    name: Option<&str>,
 ) -> Result<TokenStream> {
-    let helper = build_helper_trait(trait_, track, selected, n, vis)?;
-    let impl_ = build_impl(trait_, track, selected, n)?;
+    let helper = build_helper_trait(trait_, track, selected, n, vis, name)?;
+    let impl_ = build_impl(trait_, track, selected, n, name)?;
     Ok(quote!(#helper #impl_))
 }
 
@@ -237,12 +260,18 @@ fn synthetic_arg_name(taken: &std::collections::BTreeSet<String>, pidx: usize) -
 /// The `All` suffix only applies when the original trait has generic
 /// parameters (so per-element parameters are meaningful); a trait without
 /// generic parameters always uses the plain name.
-fn helper_name(trait_: &ItemTrait, n: usize, track: Track, has_orig_params: bool) -> Ident {
+fn helper_name(
+    trait_: &ItemTrait, n: usize, track: Track, has_orig_params: bool, name: Option<&str>,
+) -> Ident {
     let suffix = match (track, has_orig_params) {
         (Track::All, true) => "All",
         _ => "",
     };
-    format_ident!("_{}Tuple{}{}", trait_.ident, n, suffix)
+    let prefix = match name {
+        Some(n) => n.to_string(),
+        None => format!("_{}", trait_.ident),
+    };
+    format_ident!("{prefix}Tuple{n}{suffix}")
 }
 
 /// Tokens naming each original generic parameter (`T`, `'a`, `N`).
@@ -323,11 +352,12 @@ fn rewrite_where_clause(wc: &Option<WhereClause>, elems: &[Ident]) -> Result<Opt
 
 fn build_helper_trait(
     trait_: &ItemTrait, track: Track, sel: &Selected, n: usize, vis: &syn::Visibility,
+    name: Option<&str>,
 ) -> Result<ItemTrait> {
     let has_orig_params = !trait_.generics.params.is_empty();
-    let taken = trait_param_names(&trait_.generics);
+    let taken = taken_names(trait_, sel);
     let elems = elem_params(n, &taken);
-    let name = helper_name(trait_, n, track, has_orig_params);
+    let name = helper_name(trait_, n, track, has_orig_params, name);
     let tr = &trait_.ident;
 
     let mut generics = trait_.generics.clone();
@@ -399,11 +429,13 @@ fn build_helper_trait(
     })
 }
 
-fn build_impl(trait_: &ItemTrait, track: Track, sel: &Selected, n: usize) -> Result<ItemImpl> {
+fn build_impl(
+    trait_: &ItemTrait, track: Track, sel: &Selected, n: usize, name: Option<&str>,
+) -> Result<ItemImpl> {
     let has_orig_params = !trait_.generics.params.is_empty();
-    let taken = trait_param_names(&trait_.generics);
+    let taken = taken_names(trait_, sel);
     let elems = elem_params(n, &taken);
-    let name = helper_name(trait_, n, track, has_orig_params);
+    let name = helper_name(trait_, n, track, has_orig_params, name);
     let tr = &trait_.ident;
 
     let orig_params = trait_.generics.params.iter().cloned().collect::<Vec<_>>();
@@ -725,7 +757,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
-        let out = generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited).unwrap();
+        let out =
+            generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited, None).unwrap();
         assert!(!out.to_string().is_empty());
     }
 
@@ -749,7 +782,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let sel = Selected { methods, consts: Vec::new(), types: Vec::new() };
-        let out = generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited)
+        let out = generate(&trait_, Track::All, &sel, 2, &syn::Visibility::Inherited, None)
             .unwrap()
             .to_string();
         assert!(

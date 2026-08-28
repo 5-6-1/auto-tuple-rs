@@ -1,7 +1,8 @@
 # auto_tuple 设计文档
 
 > 本文件是实现的唯一依据。核心语义、双轨道形态、重写规则、边界与错误处理均在此定稿。
-> 状态：语义定稿，待实现。
+> 状态：已实现并发布（crates.io `auto-tuple`，当前 0.1.x）。本文是实现的唯一依据；
+> 改动语义必须先改本文。
 
 ## 1. 核心语义
 
@@ -185,7 +186,7 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 - `where Self::Output: Clone` → 元素投影 `A::Output: Clone, B::Output: Clone`。
 - `where Self: Sized` → 元素化后恒真，无害。
 - 复杂嵌套（`where Vec<Self>: Foo`）→ compile_error。
-- 原 trait 级 where 原样复制进辅助 trait 与 impl。
+- 原 trait 级 where 经同一重写（§4.4 规则）进入辅助 trait 与 impl——`Self` 主语谓词同样被拆分（非"原样复制"）。
 
 ### 4.5 impl where 完整性
 
@@ -209,7 +210,7 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 - 共享：`_{Trait}Tuple{N}`；异参：`_{Trait}Tuple{N}All`（前导下划线）。
 - 生成在原 trait 所在模块，`#[doc(hidden)]`。
 - 可见性：默认继承原 trait（pub trait → pub 辅助 trait）；可用属性覆盖（`#[auto_tuple(pub(crate))]`），适合"原 trait 公开但辅助 trait 保持 crate 内"的场景。
-- 可命名覆盖（同时覆盖两个轨道名）。
+- 可命名覆盖（`name = "X"` 选项，同时覆盖两个轨道名，生成 `XTuple{N}` / `XTuple{N}All`）。
 - 跨模块同名 trait 不冲突（模块隔离）；用户手动实现同名辅助 trait → E0119，文档约定 + 可命名规避。
 - 生成名（元素参数 `__T{i}`、每元素参数组 `__T{i}_{name}`/`'__L{i}_{name}`/`__C{i}_{name}`、合成参数 `__arg{i}`）自动避让原 trait 参数名与已有参数名。
 
@@ -220,7 +221,8 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 - **同模块调用零暴露**：辅助 trait 与调用代码同模块时，方法解析自动找到它，用户代码不出现任何生成名。
 - **跨模块调用**是 Rust 方法解析的语言规则：需要把辅助 trait 引入作用域（`use`），与任何 trait 方法一致（`use std::io::Read` 才能调 `.read()`）。这是语言机制，宏无法绕过；文档不鼓励也不示范这种用法。
 - 辅助 trait 带 `#[doc(hidden)]`，不下划线的名字不进 rustdoc；完全隐藏用 `pub(crate)` 覆盖。
-- 此原则对未来的功能（命名覆盖、重导出等）始终生效。
+- **名字是稳定 API**：一旦发布，默认命名规则（`_{Trait}Tuple{N}`）与自定义 `name` 前缀对已发布用户即成为契约，改名是破坏性变更（semver 语义）。可命名覆盖提供自定义入口，但同样在发布后保持稳定。
+- 此原则对未来的功能（重导出等）始终生效。
 
 ## 8. 错误处理（compile_error）
 

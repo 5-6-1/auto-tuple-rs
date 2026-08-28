@@ -29,11 +29,14 @@ pub struct Config {
     /// Visibility override for the generated helper traits; `None` inherits
     /// the original trait's visibility.
     pub vis: Option<Visibility>,
+    /// Name prefix override for the generated helper traits (`name = "X"`
+    /// yields `XTuple2` / `XTuple2All`); `None` uses `_{Trait}Tuple{N}`.
+    pub name: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { sizes: 2..=12, items: None, vis: None }
+        Self { sizes: 2..=12, items: None, vis: None, name: None }
     }
 }
 
@@ -77,6 +80,19 @@ impl Parse for Config {
                     return Err(input.error("range start must not exceed its end"));
                 }
                 cfg.sizes = start..=end;
+            } else if input.peek(Ident) && input.peek2(Token![=]) {
+                // `name = "X"` option; an ident followed by `=` cannot be a
+                // trait item selector.
+                let key: Ident = input.parse()?;
+                if key != "name" {
+                    return Err(input.error("unknown option; expected `name`"));
+                }
+                input.parse::<Token![=]>()?;
+                let lit: syn::LitStr = input.parse()?;
+                if cfg.name.is_some() {
+                    return Err(input.error("duplicate `name` option"));
+                }
+                cfg.name = Some(lit.value());
             } else if input.peek(Ident) {
                 items.insert(input.parse::<Ident>()?.to_string());
             } else if input.peek(Token![pub]) {
