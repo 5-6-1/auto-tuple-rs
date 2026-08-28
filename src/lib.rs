@@ -177,12 +177,7 @@ mod proptests {
 
     /// Associated const/type items (syntactically valid).
     fn extra_item_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            "const MAX: usize;",
-            "type Out;",
-            "type Out: Clone;",
-            "type Out = usize;",
-        ]
+        prop_oneof!["const MAX: usize;", "type Out;", "type Out: Clone;", "type Out = usize;",]
     }
 
     proptest! {
