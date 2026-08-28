@@ -92,7 +92,12 @@ impl Parse for Config {
                 if cfg.name.is_some() {
                     return Err(input.error("duplicate `name` option"));
                 }
-                cfg.name = Some(lit.value());
+                let name = lit.value();
+                // `format_ident!` panics on illegal identifiers; validate here
+                // so the user gets a proper error instead.
+                syn::parse_str::<Ident>(&name)
+                    .map_err(|_| input.error("`name` must be a valid Rust identifier prefix"))?;
+                cfg.name = Some(name);
             } else if input.peek(Ident) {
                 items.insert(input.parse::<Ident>()?.to_string());
             } else if input.peek(Token![pub]) {
@@ -203,5 +208,15 @@ mod tests {
     #[test]
     fn rejects_duplicate_visibility() {
         assert!(syn::parse_str::<Config>("pub, pub(crate)").is_err());
+    }
+
+    #[test]
+    fn rejects_illegal_name() {
+        assert!(syn::parse_str::<Config>("name = \"foo-bar\"").is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_name() {
+        assert!(syn::parse_str::<Config>("name = \"A\", name = \"B\"").is_err());
     }
 }
