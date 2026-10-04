@@ -1,8 +1,32 @@
 # auto_tuple 设计文档
 
 > 本文件是实现的唯一依据。核心语义、双轨道形态、重写规则、边界与错误处理均在此定稿。
-> 状态：已实现并发布（crates.io `auto-tuple`，当前 0.1.x）。本文是实现的唯一依据；
-> 改动语义必须先改本文。
+> 发布基线：crates.io / GitHub v0.1.2。本文描述下一版本 0.2.0 的开发契约；
+> 未发布变化见 CHANGELOG.md 的 Unreleased。改动语义必须先改本文。
+
+## 0. 用户侧选择语法（0.2.0）
+
+- 默认选择所有方法、关联常量和关联类型，等价于 `@all`。0.1.x 的默认仅方法
+  行为可用 `#[auto_tuple(@all_methods)]` 保留；这是一次有意的破坏性变化。
+- 裸名称选择单项；`@` 族选择集合；逗号合并；`-` 排除。支持扁平列表
+  `[read, Output]`、`[@all_methods, MAX]` 和排除列表 `-[read, Output]`。
+  列表内部不接受嵌套列表、配置项或排除表达式；空列表报错。
+- 没有正向选择表达式时以 `@all` 为起点（包括仅配置、仅排除）；存在正向
+  表达式时仅取它们的并集。先合并、最后统一排除，顺序不影响结果，重复去重。
+  按原 trait 声明顺序保留每一类成员。
+- 正向族没有匹配项或排除后为空时，保留空结果，生成空辅助 trait；不回退到
+  `@all`。原本为空的 trait 仍然合法。
+- 未知族、未知成员（包括排除中的名称）均定位到原始选择 token 报错。
+  已存在但不在正向集合中的排除项无害。
+- 成员族与 batch-impl 同名同义：`@all`、`@all_methods`（全部 fn，含关联函数）、
+  `@all_constants`、`@all_types`；`@all_default` / `@all_required` 及各自
+  `_methods` / `_constants` / `_types` 细分；`@all_ref_methods`（`&self`、
+  `&mut self`）、`@all_value_methods`（`self`，含显式类型 receiver）、
+  `@all_static_methods`（无 receiver）。不引入泛型参数族或 `include` 模式。
+- 成员选择先于轨道分析和能力检查。被选中的不支持项仍然报错；排除项不进入
+  这两步。`@all_value_methods` 选中自定义 receiver 时仍按既有规则报错。
+- 范围、`name`、可见性语法保持原样；各允许一次，可与选择表达式混排，允许
+  末尾逗号。默认元数仍为 `2..=12`。
 
 ## 1. 核心语义
 
@@ -19,7 +43,8 @@
 
 ## 2. 辅助 trait：双轨道形态
 
-`#[auto_tuple]` 处理 trait 定义，生成辅助 trait + blanket impl。**每个原 trait 只生成一个辅助 trait**（按轨道判定择一），不重复。
+`#[auto_tuple]` 处理 trait 定义，按每个请求元数生成一对辅助 trait + blanket impl。
+同一元数按轨道判定择一，不同时生成两条轨道。
 
 ### 2.1 轨道判定
 
@@ -47,7 +72,7 @@ where
 {
     fn g(x: &T) -> (T, T);
     fn foo() -> (Box<A>, Box<B>);
-    type Output;                     // 仅用户显式选中时生成
+    type Output;                     // 默认包含；可通过选择语法排除
 }
 
 impl<T, A: Tr<T>, B: Tr<T>> _TrTuple2<A, B, T> for (A, B) {
@@ -171,14 +196,14 @@ Elem((T1, T2), i)    = (Elem(T1, i), Elem(T2, i))
 
 - 类型按 §3.1 元组化（`usize` → `(usize, usize)`；`Self` → `(A, B)`；`T` → `(T, T)`）。
 - 值逐元素：`const MAX: (usize, usize) = (A::MAX, B::MAX);`（const 上下文合法）。
-- **默认不处理**，仅用户显式指定时生成。
+- 默认包含；只有最终选择集中的关联常量才生成。
 
 ### 4.3 关联类型
 
 - 辅助 trait 声明 `type Output;`（无默认），impl 给定 `type Output = (A::Output, B::Output);`。
 - 方法签名中的 `Self::Output` 展开为元素投影 `(A::Output, B::Output)`（bound 已满足，无需辅助 trait 自带关联类型）。
 - **原 bound 处理（白名单）**：辅助 trait 的关联类型 bound 只保留**元组必然满足**的（`Clone`/`Copy`/`PartialEq`/`Eq`/`PartialOrd`/`Ord`/`Hash`/`Debug`/`Default`/`Sized` 无参形式、lifetime）。其余一律删除（`Iterator`、`Add`、`AsRef<T>`、含 `Self`/原参数的 bound）——元组值无法满足，元素侧已由 `A: Tr<...>` 保证。
-- **默认不处理**，仅用户显式指定时生成。
+- 默认包含；只有最终选择集中的关联类型才生成。
 
 ### 4.4 方法级 / trait 级 where
 
@@ -216,7 +241,8 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 
 ### 7.1 设计原则：内部名不暴露
 
-辅助 trait 的名字与全部生成参数名是**内部实现细节**，不属于用户 API：
+辅助 trait 的名字可用于跨模块导入和 UFCS，属于稳定的用户 API；合成参数名
+属于内部实现细节，用户通常无需书写：
 
 - **同模块调用零暴露**：辅助 trait 与调用代码同模块时，方法解析自动找到它，用户代码不出现任何生成名。
 - **跨模块调用**是 Rust 方法解析的语言规则：需要把辅助 trait 引入作用域（`use`），与任何 trait 方法一致（`use std::io::Read` 才能调 `.read()`）。这是语言机制，宏无法绕过；文档不鼓励也不示范这种用法。
@@ -234,7 +260,8 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 - 返回中 `+ use<..>` precise capturing（trait/impl 两侧的 per-element opaque 捕获列表尚未处理）。
 - where 中复杂 Self 嵌套。
 - auto trait。
-- 空选择集提示：`#[auto_tuple()]` 与 `#[auto_tuple]` 均视为默认配置（处理全部方法），无显式空选择集写法。
+- `#[auto_tuple()]` 与 `#[auto_tuple]` 均视为默认配置（处理全部三类成员）。
+  `#[auto_tuple(@all, -@all)]` 显式选择空集，仍生成空辅助 trait。
 
 ## 9. 不支持边界（交给编译器）
 
@@ -255,3 +282,15 @@ impl 泛型参数 = 辅助 trait 声明的**全部 bound 原样复制**（原参
 3. ~~edition 2024 unsafe body 处理~~ — 已验证（unsafe fn body 显式 `unsafe {}`）。
 4. ~~泛型 async fn 在目标工具链的行为~~ — 已验证：原生 `async fn`（含参数）逐元素顺序 await 正常；泛型 async 方法由编译器裁决。
 5. ~~RPIT 返回（`impl Trait`）~~ — 已验证支持：逐元素展开为每元素一个 opaque，隐藏类型为元素各自的 opaque。
+
+### 11.1 已知实现缺口（本轮选择语法之外）
+
+以下是 0.1.2 基线核查时复现的实现问题，尚未作为新语义或支持保证：
+
+- All 轨道复制原类型参数 bound 时错误套用了关联类型的元组白名单；
+  `trait Tr<T: Send> { fn val(&self) -> usize; }` 会丢失 `Send` 约束。
+- 转发调用未显式传递方法泛型实参；`fn val<T>(&self) -> usize` 这类
+  无法从参数和返回推断 `T` 的方法会在展开代码中报类型推断错误。
+- 生成 impl 方法没有保留原方法的 `cfg` 属性，条件移除的成员仍可能被生成。
+
+零元组与 Shared 泛型组合的宏 panic 已在本轮修复，并由编译测试和属性测试覆盖。

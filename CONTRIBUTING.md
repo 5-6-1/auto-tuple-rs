@@ -1,5 +1,8 @@
 # Contributing
 
+Start with [the development guide](docs/development-guide.md), the authority
+for architecture boundaries, style, testing, compatibility and release flow.
+
 ## Commits
 
 Lightweight [Conventional Commits](https://www.conventionalcommits.org/):
@@ -18,16 +21,18 @@ Lightweight [Conventional Commits](https://www.conventionalcommits.org/):
 Before committing, run the full quality gate:
 
 ```sh
-cargo check
+cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo test          # unit tests + trybuild compile matrix
 cargo fmt --check
+cargo doc --no-deps
 ```
 
 `trybuild` is used for the compile-test matrix: `tests/pass/*.rs` must build
 and run their assertions, `tests/fail/*.rs` must fail with a message matching
-the adjacent `.stderr` baseline. When an intended diagnostic changes, delete
-the stale `.stderr`, rerun, and commit the regenerated baseline.
+the adjacent `.stderr` baseline. For an intentional diagnostic change, use
+`TRYBUILD=overwrite cargo test --test ui`, inspect the diff and commit the
+reviewed baseline. `cargo test` also runs the README and API doctests.
 
 ## Design
 

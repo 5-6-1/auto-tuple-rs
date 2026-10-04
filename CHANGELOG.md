@@ -2,6 +2,29 @@
 
 > User-visible feature and behavior changes. English, one entry per release.
 
+## 0.2.0 (2026-10-04)
+
+- **Breaking: default selection includes methods, associated constants and
+  associated types.** Use `#[auto_tuple(@all_methods)]` to retain the 0.1.x
+  default. Selecting more items can also change the Shared/All helper shape.
+  Two member kinds that 0.1.x skipped by default are now validated and can
+  reject a trait that used to compile:
+  - **Generic associated types** (`type Output<T>;`) are unsupported; exclude
+    them with `#[auto_tuple(@all_methods, -Output)]` or `-@all_types`.
+  - **Custom receivers** (`fn boxed(self: Box<Self>)`) are unsupported; exclude
+    the method by name (`-boxed`) or keep `@all_methods` plus explicit
+    selections.
+- Add the batch-impl member selector families (`@all`, kind, default/required
+  and receiver filters), unions, flat lists and exclusions (`-name`,
+  `-[a, b]`, `-@all_types`). Exclusion-only attributes start from all members;
+  exclusions win regardless of order. An empty result stays empty.
+- Unknown names point to the selector token, including misspelled exclusions.
+- Fix a macro panic when arity zero is combined with Shared trait parameters.
+- Compile README examples as doctests and expand property-test coverage across
+  selector expressions and zero/one/multiple tuple arities. Sample Rust snippets
+  as literals, so regex metacharacters do not strip method syntax from inputs.
+- Document project-specific development, quality and release conventions.
+
 ## 0.1.2 (2026-08-27)
 
 - **Generated helper-trait params now avoid method-local generic params**

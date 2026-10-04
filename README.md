@@ -23,8 +23,18 @@ trait Tr {
 struct X(usize);
 struct Y(usize);
 
-impl Tr for X { /* ... */ }
-impl Tr for Y { /* ... */ }
+impl Tr for X {
+    fn zero() -> usize { 1 }
+    fn bump(&mut self) -> usize { self.0 += 1; self.0 }
+    const MAX: usize = 5;
+    type Output = u32;
+}
+impl Tr for Y {
+    fn zero() -> usize { 2 }
+    fn bump(&mut self) -> usize { self.0 += 1; self.0 }
+    const MAX: usize = 50;
+    type Output = u64;
+}
 
 // Generated for arity 2 (among others):
 //
@@ -35,11 +45,11 @@ fn main() {
     // No imports needed: the helper trait lives in this module, so method
     // resolution finds it automatically. Zero boilerplate.
     let mut t = (X(1), Y(2));
-    t.bump();                              // (X(2), Y(3))
+    assert_eq!(t.bump(), (2, 3));
     assert_eq!(t.0.0, 2);
     assert_eq!(<(X, Y)>::zero(), (1, 2));  // associated fn forwarding
     assert_eq!(<(X, Y)>::MAX, (5, 50));    // assoc const forwarding
-    // <(X, Y) as _TrTuple2<X, Y>>::Output == (X::Output, Y::Output)
+    let _: <(X, Y) as _TrTuple2<X, Y>>::Output = (1u32, 2u64);
 }
 ```
 
@@ -52,7 +62,7 @@ any other trait's methods (`use std::io::Read` to call `.read()`).
 
 Every selected trait item is tuple-ized element-wise:
 
-```rust
+```text
 (x, y).foo(a, b)  == (x.foo(a, b), y.foo(a, b))
 (A, B)::MAX       == (A::MAX, B::MAX)
 (A, B)::Output    == (A::Output, B::Output)
@@ -62,12 +72,18 @@ There is no other semantics: no arithmetic merging, no short-circuiting.
 
 ## Usage
 
-```rust
-#[auto_tuple]                 // default arities 2..=12, all methods
+```text
+#[auto_tuple]                 // default arities 2..=12, all fn/const/type items
 #[auto_tuple(2..=12)]         // explicit arity range
 #[auto_tuple(0..=1)]          // arities 0 and 1
 #[auto_tuple(foo, 2..=4)]     // only the `foo` method
 #[auto_tuple(MAX, Output)]    // only assoc const `MAX` and assoc type `Output`
+#[auto_tuple(@all_methods)]  // all methods, including associated functions
+#[auto_tuple(@all_methods, MAX)] // union: methods plus MAX
+#[auto_tuple(-reset)]        // all items except reset
+#[auto_tuple(@all, -@all_types)] // all items except associated types
+#[auto_tuple(@all_methods, -[reset, clear], 2..=4)]
+#[auto_tuple(pub(crate), name = "Reader", @all_ref_methods)]
 ```
 
 - Ranges follow Rust range semantics (`2..12` excludes 12, `2..=12` includes it).
@@ -75,13 +91,70 @@ There is no other semantics: no arithmetic merging, no short-circuiting.
   the default `2..=12` emits 11 pairs per annotated trait. For heavy trait
   graphs prefer a tighter range (`#[auto_tuple(2..=4)]`) to keep build times
   down.
-- Without an explicit item list all **methods** are processed; associated
-  consts and types are processed only when explicitly named.
+- Without a positive selector all **methods, associated constants and
+  associated types** are selected, including when only exclusions are given.
+- Positive names and families form a union; exclusions are applied last, so
+  `@all, -foo, foo` still excludes `foo`. Duplicates are removed. Flat lists
+  (`[foo, MAX]`, `-[@all_types, reset]`) are also supported.
+- Unknown member names (including exclusions) and unknown families are errors.
+  An empty family or a fully excluded set stays empty and generates empty
+  helper traits; it never falls back to all members. Unsupported items are
+  checked only after selection and are not silently skipped.
 - A visibility override (`pub`, `pub(crate)`, ...) applies to the generated
   helper traits; by default they inherit the original trait's visibility.
 - The helper traits are generated in the same module as the original trait and
   share its visibility; bring them into scope with `use` to call the tuple-ized
   methods.
+
+### Member selector families
+
+The names and filters match batch-impl's member families:
+
+| Family | Selects |
+|---|---|
+| `@all` | All methods, associated constants and associated types |
+| `@all_methods` / `@all_constants` / `@all_types` | All members of that kind |
+| `@all_required` / `@all_default` | Members without / with a default body or value |
+| `@all_required_methods` / `@all_default_methods` | Methods filtered by default body |
+| `@all_required_constants` / `@all_default_constants` | Constants filtered by default value |
+| `@all_required_types` / `@all_default_types` | Associated types filtered by default type |
+| `@all_ref_methods` | Methods with `&self` or `&mut self` |
+| `@all_value_methods` | Methods with `self`, including typed receivers |
+| `@all_static_methods` | Associated functions without a receiver |
+
+A family classifies syntax; it does not enable unsupported language features.
+For example, selecting a typed receiver still reports the custom-receiver
+diagnostic. A selected default method forwards to each element's implementation.
+
+```rust
+use auto_tuple::auto_tuple;
+
+#[auto_tuple(@all_ref_methods, MAX, -reset, 2..=2)]
+trait Read {
+    fn read(&self) -> usize;
+    fn reset(&mut self);
+    fn consume(self: Box<Self>); // excluded before receiver validation
+    const MAX: usize = 10;
+}
+
+struct Reader;
+impl Read for Reader {
+    fn read(&self) -> usize { 7 }
+    fn reset(&mut self) {}
+    fn consume(self: Box<Self>) {}
+}
+
+assert_eq!((Reader, Reader).read(), (7, 7));
+assert_eq!(<(Reader, Reader)>::MAX, (10, 10));
+```
+
+### Migrating from 0.1.x
+
+Replace a bare `#[auto_tuple]` with `#[auto_tuple(@all_methods)]` to preserve
+the former methods-only default. Existing explicit member lists retain their
+meaning. The new default may select unsupported associated types or change
+Shared/All analysis when an associated item's bounds mention a trait parameter;
+review helper-trait imports and explicit UFCS paths when adopting it.
 
 ## Two shapes: shared and All
 
@@ -142,15 +215,15 @@ Left to the compiler (no pre-emption):
 
 ## Design
 
-See [`docs/design.md`](docs/design.md) for the full design: semantics,
+See [`docs/design.md`](https://github.com/5-6-1/auto-tuple-rs/blob/master/docs/design.md) for the full design: semantics,
 two-track decision procedure, type rewriting rules, error handling and the
 edge-case matrix.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the commit convention and the
-quality gate.
+See [`docs/development-guide.md`](https://github.com/5-6-1/auto-tuple-rs/blob/master/docs/development-guide.md) for the development
+and release conventions, and [`CONTRIBUTING.md`](https://github.com/5-6-1/auto-tuple-rs/blob/master/CONTRIBUTING.md) for quick checks.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see [`LICENSE`](https://github.com/5-6-1/auto-tuple-rs/blob/master/LICENSE).
