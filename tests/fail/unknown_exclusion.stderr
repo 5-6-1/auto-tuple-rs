@@ -1,0 +1,5 @@
+error: trait item `raed` not found
+ --> tests/fail/unknown_exclusion.rs:3:21
+  |
+3 | #[auto_tuple(@all, -raed)]
+  |                     ^^^^

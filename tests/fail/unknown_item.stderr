@@ -1,7 +1,5 @@
 error: trait item `does_not_exist` not found
- --> tests/fail/unknown_item.rs:6:1
+ --> tests/fail/unknown_item.rs:5:14
   |
-6 | / trait Tr {
-7 | |     fn foo(&self);
-8 | | }
-  | |_^
+5 | #[auto_tuple(does_not_exist)]
+  |              ^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: unknown member selector `@all_methdos`
+ --> tests/fail/unknown_family.rs:3:15
+  |
+3 | #[auto_tuple(@all_methdos)]
+  |               ^^^^^^^^^^^

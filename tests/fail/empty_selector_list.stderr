@@ -1,0 +1,5 @@
+error: unexpected end of input, selector lists must not be empty
+ --> tests/fail/empty_selector_list.rs:3:22
+  |
+3 | #[auto_tuple(@all, -[])]
+  |                      ^

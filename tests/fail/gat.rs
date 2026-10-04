@@ -2,7 +2,7 @@
 
 use auto_tuple::auto_tuple;
 
-#[auto_tuple(Output)]
+#[auto_tuple]
 trait Tr {
     type Output<T>;
 }
