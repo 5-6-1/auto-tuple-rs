@@ -1,47 +1,23 @@
-//! Element-wise tuple-ization for traits.
-//!
-//! `#[auto_tuple]` generates, for each requested arity, a helper trait whose
-//! methods/consts/types forward element-wise to each element of an N-tuple:
-//! `(x, y).foo(a)` desugars to `(x.foo(a), y.foo(a))`. See `docs/design.md`
-//! for the full semantics.
-//!
-//! ```rust
-//! use auto_tuple::auto_tuple;
-//!
-//! #[auto_tuple]
-//! trait Tr {
-//!     fn zero() -> usize;
-//! }
-//!
-//! struct X;
-//! struct Y;
-//!
-//! impl Tr for X { fn zero() -> usize { 1 } }
-//! impl Tr for Y { fn zero() -> usize { 2 } }
-//!
-//! # fn main() {
-//! // No import needed: the helper trait lives in this module.
-//! assert_eq!(<(X, Y)>::zero(), (1, 2));
-//! # }
-//! ```
+#![doc = include_str!("../README.md")]
 
 mod analyze;
 mod attr;
 mod codegen;
 mod rewrite;
+mod selection;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemTrait, TraitItem};
+use syn::ItemTrait;
 
 use crate::attr::Config;
-use crate::codegen::Selected;
 
 /// Generates tuple helper traits for the annotated trait.
 ///
 /// Arguments: an optional range of arities (default `2..=12`) and an optional
-/// list of trait items to process (default: all methods; associated consts and
-/// types are only processed when explicitly named).
+/// member selection (default: all methods, associated constants and types).
+/// Names and `@all` families form a union; `-name`, `-[a, b]` and `-@all_types`
+/// exclude members. An exclusion-only selection starts from all members.
 #[proc_macro_attribute]
 pub fn auto_tuple(args: TokenStream, input: TokenStream) -> TokenStream {
     match expand(args.into(), input.into()) {
@@ -63,7 +39,7 @@ fn expand(
         ));
     }
 
-    let selected = select(&trait_, &cfg)?;
+    let selected = selection::select(&trait_, &cfg.selection)?;
     let track =
         analyze::decide_track(&trait_, &selected.methods, &selected.consts, &selected.types);
 
@@ -74,54 +50,6 @@ fn expand(
     }
 
     Ok(quote!(#trait_ #(#generated)*))
-}
-
-/// Picks the trait items to process.
-///
-/// Without an explicit list all methods are selected; associated consts and
-/// types are only selected when explicitly named.
-fn select<'a>(trait_: &'a ItemTrait, cfg: &Config) -> syn::Result<Selected<'a>> {
-    let Some(names) = &cfg.items else {
-        return Ok(Selected {
-            methods: trait_
-                .items
-                .iter()
-                .filter_map(|i| match i {
-                    TraitItem::Fn(f) => Some(f),
-                    _ => None,
-                })
-                .collect(),
-            consts: Vec::new(),
-            types: Vec::new(),
-        });
-    };
-
-    let mut selected = Selected { methods: Vec::new(), consts: Vec::new(), types: Vec::new() };
-    for name in names {
-        let mut found = false;
-        for item in &trait_.items {
-            let ident = match item {
-                TraitItem::Fn(f) => &f.sig.ident,
-                TraitItem::Const(c) => &c.ident,
-                TraitItem::Type(t) => &t.ident,
-                _ => continue,
-            };
-            if ident == name {
-                match item {
-                    TraitItem::Fn(f) => selected.methods.push(f),
-                    TraitItem::Const(c) => selected.consts.push(c),
-                    TraitItem::Type(t) => selected.types.push(t),
-                    _ => {}
-                }
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return Err(syn::Error::new_spanned(trait_, format!("trait item `{name}` not found")));
-        }
-    }
-    Ok(selected)
 }
 
 #[cfg(test)]
@@ -155,8 +83,8 @@ mod proptests {
 
     /// Method shapes covering receivers, args, generics, async, unsafe,
     /// `Self`-typed params/returns, RPIT and `where` clauses.
-    fn method_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
+    fn method_strategy() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec![
             "fn foo(&self) -> usize;",
             "fn foo(&mut self, x: usize) -> usize;",
             "fn foo(self);",
@@ -172,12 +100,17 @@ mod proptests {
             "fn foo(&self) -> impl Iterator<Item = Self>;",
             "fn foo(&self, x: Self::Output) -> Self::Output;",
             "fn foo(&self) -> usize where Self: Sized;",
-        ]
+        ])
     }
 
     /// Associated const/type items (syntactically valid).
-    fn extra_item_strategy() -> impl Strategy<Value = String> {
-        prop_oneof!["const MAX: usize;", "type Out;", "type Out: Clone;", "type Out = usize;",]
+    fn extra_item_strategy() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec![
+            "const MAX: usize;",
+            "type Out;",
+            "type Out: Clone;",
+            "type Out = usize;",
+        ])
     }
 
     proptest! {
@@ -191,11 +124,20 @@ mod proptests {
             trait_generics in trait_generics_strategy(),
             methods in prop::collection::vec(method_strategy(), 0..6),
             extra_items in prop::collection::vec(extra_item_strategy(), 0..3),
+            args in prop::sample::select(vec![
+                "", "0..=1", "@all", "@all_methods, 0..=2", "@all_types",
+                "@all_constants", "@all, -@all", "@all_ref_methods, -foo",
+                "[@all_methods, Out], -foo", "@all_required", "@all_default",
+                "@missing", "-", "[]",
+            ]),
         ) {
             let body = [methods.join(" "), extra_items.join(" ")].join(" ");
             let src = format!("trait {trait_name}{trait_generics} {{ {body} }}");
             let tokens: TokenStream = src.parse().unwrap();
-            let _ = expand(TokenStream::new(), tokens);
+            // Keep the generator honest: a syntax error must not turn this
+            // into a property test of the parser's early-return path alone.
+            syn::parse2::<syn::ItemTrait>(tokens.clone()).unwrap();
+            let _ = expand(args.parse().unwrap(), tokens);
         }
     }
 }

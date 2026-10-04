@@ -13,6 +13,7 @@ use syn::{
 
 use crate::analyze::Track;
 use crate::rewrite::{self, tupleize};
+use crate::selection::Selected;
 
 /// Names of the trait's generic parameters (for bound-dropping decisions).
 fn trait_param_names(generics: &syn::Generics) -> std::collections::BTreeSet<String> {
@@ -144,13 +145,6 @@ fn contains_precise_capture(ty: &Type) -> bool {
     let mut finder = Find(false);
     finder.visit_type(ty);
     finder.0
-}
-
-/// The trait items selected for tuple-ization.
-pub struct Selected<'a> {
-    pub methods: Vec<&'a TraitItemFn>,
-    pub consts: Vec<&'a TraitItemConst>,
-    pub types: Vec<&'a TraitItemType>,
 }
 
 /// Generates the helper trait and blanket impl for one arity.
@@ -493,12 +487,17 @@ fn build_impl(
     }
 
     let all_names: Vec<TokenStream> = all_per_elem.iter().flatten().cloned().collect();
-    let helper_path: syn::Path = match (has_orig_params, track) {
-        (false, _) => parse_quote!(#name<#(#elems),*>),
-        (true, Track::Shared) if elems.is_empty() && orig_names.is_empty() => parse_quote!(#name),
-        (true, Track::All) if elems.is_empty() && all_names.is_empty() => parse_quote!(#name),
-        (true, Track::Shared) => parse_quote!(#name<#(#elems),*, #(#orig_names),*>),
-        (true, Track::All) => parse_quote!(#name<#(#elems),*, #(#all_names),*>),
+    // Build one argument sequence: an empty element prefix (arity zero) must
+    // not leave a leading comma before Shared parameters.
+    let mut helper_args = elems.iter().map(ToTokens::to_token_stream).collect::<Vec<_>>();
+    helper_args.extend(match track {
+        Track::Shared => orig_names,
+        Track::All => all_names,
+    });
+    let helper_path: syn::Path = if helper_args.is_empty() {
+        syn::parse2(quote!(#name))?
+    } else {
+        syn::parse2(quote!(#name<#(#helper_args),*>))?
     };
     let self_ty = tuple_type(n, &elems);
 

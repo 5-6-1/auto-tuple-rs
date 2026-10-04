@@ -9,23 +9,24 @@
 //! ```
 //!
 //! A range selects the tuple arities to generate; identifiers select the
-//! trait items to process. Without an explicit item list all methods are
-//! processed (assoc consts/types only when explicitly named).
+//! trait items to process. Selection defaults to all methods, associated
+//! constants and associated types; families and exclusions refine that set.
 
-use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitInt, Result, Token, Visibility};
 
+use crate::selection::Selection;
+
 /// Parsed `#[auto_tuple(...)]` configuration.
 #[derive(Clone)]
 pub struct Config {
     /// Inclusive range of tuple arities to generate. Defaults to `2..=12`.
     pub sizes: RangeInclusive<usize>,
-    /// Explicitly selected trait items; `None` means "all supported items".
-    pub items: Option<BTreeSet<String>>,
+    /// Member-set expressions, resolved before analysis and code generation.
+    pub selection: Selection,
     /// Visibility override for the generated helper traits; `None` inherits
     /// the original trait's visibility.
     pub vis: Option<Visibility>,
@@ -36,7 +37,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { sizes: 2..=12, items: None, vis: None, name: None }
+        Self { sizes: 2..=12, selection: Selection::default(), vis: None, name: None }
     }
 }
 
@@ -50,7 +51,6 @@ impl Config {
 impl Parse for Config {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut cfg = Self::default();
-        let mut items = BTreeSet::new();
         let mut range_seen = false;
 
         while !input.is_empty() {
@@ -98,8 +98,12 @@ impl Parse for Config {
                 syn::parse_str::<Ident>(&name)
                     .map_err(|_| input.error("`name` must be a valid Rust identifier prefix"))?;
                 cfg.name = Some(name);
-            } else if input.peek(Ident) {
-                items.insert(input.parse::<Ident>()?.to_string());
+            } else if input.peek(Ident)
+                || input.peek(Token![@])
+                || input.peek(Token![-])
+                || input.peek(syn::token::Bracket)
+            {
+                cfg.selection.parse_term(input)?;
             } else if input.peek(Token![pub]) {
                 let vis: Visibility = input.parse()?;
                 if cfg.vis.is_some() {
@@ -107,9 +111,8 @@ impl Parse for Config {
                 }
                 cfg.vis = Some(vis);
             } else {
-                return Err(
-                    input.error("expected an identifier, a range like `2..=12`, or a visibility")
-                );
+                return Err(input
+                    .error("expected a member selector, a range like `2..=12`, or a visibility"));
             }
 
             if input.is_empty() {
@@ -118,7 +121,6 @@ impl Parse for Config {
             input.parse::<Token![,]>()?;
         }
 
-        cfg.items = (!items.is_empty()).then_some(items);
         Ok(cfg)
     }
 }
@@ -140,7 +142,6 @@ mod tests {
     fn empty_args_use_defaults() {
         let cfg = Config::from_tokens(TokenStream::new()).unwrap();
         assert_eq!(cfg.sizes, 2..=12);
-        assert!(cfg.items.is_none());
         assert!(cfg.vis.is_none());
     }
 
@@ -158,19 +159,17 @@ mod tests {
     fn parses_items_and_range() {
         let cfg = parse("foo, bar, MAX, 2..=4");
         assert_eq!(cfg.sizes, 2..=4);
-        assert_eq!(cfg.items, Some(BTreeSet::from(["foo".into(), "bar".into(), "MAX".into()])));
     }
 
     #[test]
     fn items_only_keeps_default_range() {
         let cfg = parse("foo, bar");
         assert_eq!(cfg.sizes, 2..=12);
-        assert_eq!(cfg.items, Some(BTreeSet::from(["foo".into(), "bar".into()])));
     }
 
     #[test]
-    fn range_only_keeps_items_none() {
-        assert_eq!(parse("2..=3").items, None);
+    fn parses_families_lists_and_exclusions() {
+        parse("@all_methods, MAX, -read, -[reset, clear], -@all_types, [Output], 2..=3,");
     }
 
     #[test]
@@ -202,7 +201,6 @@ mod tests {
     fn parses_visibility_override() {
         let cfg = parse("pub(crate), foo");
         assert!(cfg.vis.is_some());
-        assert_eq!(cfg.items, Some(BTreeSet::from(["foo".into()])));
     }
 
     #[test]
@@ -218,5 +216,25 @@ mod tests {
     #[test]
     fn rejects_duplicate_name() {
         assert!(syn::parse_str::<Config>("name = \"A\", name = \"B\"").is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_selectors() {
+        for args in [
+            "@",
+            "@missing",
+            "-",
+            "-@missing",
+            "[]",
+            "-[]",
+            "[foo,,bar]",
+            "[[foo]]",
+            "[foo, -bar]",
+            "@all_methods foo",
+            "@all,,foo",
+            "[2..=4]",
+        ] {
+            assert!(syn::parse_str::<Config>(args).is_err(), "{args}");
+        }
     }
 }
