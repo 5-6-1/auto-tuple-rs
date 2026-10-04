@@ -63,6 +63,8 @@ jobs:
   doc:
     name: doc
     runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -Dwarnings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
