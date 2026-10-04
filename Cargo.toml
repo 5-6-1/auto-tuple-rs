@@ -1,6 +1,6 @@
 [package]
 name = "auto-tuple"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["5-6-1 <5-6-1@users.noreply.github.com>"]
 description = "Element-wise tuple-ization for traits: auto-generate tuple helper traits and blanket impls"
 keywords = ["proc_macro", "tuple", "trait"]
